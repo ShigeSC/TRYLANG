@@ -1,27 +1,98 @@
 --[[
-    Inferno Viewer GUI
-    - Shows up to 20 servers
-    - Working Search bar
-    - Join button (copies roblox:// link)
+    Inferno Scanner + Hop
+    Never joins a JobId already visited by Acc 1 or Acc 2
 ]]
+
+local TRADE_WORLD_PLACE_ID = 129954712878723
+if game.PlaceId ~= TRADE_WORLD_PLACE_ID then return end
 
 local CONFIG = {
     JSONBIN_ID = "6a63b2fcda38895dfe8b51c7",
     JSONBIN_API_KEY = "$2a$10$nYqa4kNpOA9gvcy1vopkGuZyNZiIhAf2LYj1zRQqUzIOAzYxWHfp2",
-    REFRESH_EVERY = 8,
+    HOP_DELAY = 8,
+    MIN_PLAYERS = 15,
+    MAX_PLAYERS = 25,
+    MIN_PRICE = 400,
+    MAX_PRICE = 800,
+    MAX_STORED = 20,
+    MAX_VISITED = 100,
+    LOCAL_VISITED_FILE = "visited_servers.txt",
 }
 
-local Players = game:GetService("Players")
+print("=== Scanner Starting ===")
+task.wait(12)
+
+local Modules = game.ReplicatedStorage:WaitForChild("Modules", 20)
+if not Modules then return end
+local TradeBoothControllers = Modules:WaitForChild("TradeBoothControllers", 10)
+if not TradeBoothControllers then return end
+
+local ListingController = require(TradeBoothControllers:WaitForChild("TradeBoothListingController"))
+local PetMutationRegistry = require(game.ReplicatedStorage.Data.PetRegistry.PetMutationRegistry)
+local EnumToName = PetMutationRegistry.EnumToPetMutation or {}
+
 local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
+local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
-local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
-local currentServers = {}
-local currentFilter = ""
+local PlaceId = game.PlaceId
+local JobId = game.JobId
+local requestFunc = request or http_request or (syn and syn.request)
 
-local function getData()
-    local requestFunc = request or http_request or (syn and syn.request)
-    if not requestFunc then return nil end
+local function getMutationName(code)
+    if not code or code == "" then return "None" end
+    return EnumToName[tostring(code)] or tostring(code)
+end
+
+local function getCurrentWeight(base, level)
+    if not base or not level then return "?" end
+    return string.format("%.2fkg", base * (1 + level * 0.1))
+end
+
+local function getJoinLink()
+    return string.format(
+        "https://www.roblox.com/games/start?placeId=%d&gameInstanceId=%s",
+        PlaceId, JobId
+    )
+end
+
+local function getRobloxLink()
+    return string.format(
+        "roblox://experiences/start?placeId=%d&gameInstanceId=%s",
+        PlaceId, JobId
+    )
+end
+
+-- ========== Local visited ==========
+local function loadLocalVisited()
+    local t = {}
+    local ok, content = pcall(readfile, CONFIG.LOCAL_VISITED_FILE)
+    if ok and content then
+        for id in string.gmatch(content, "[^\r\n]+") do
+            if id ~= "" then t[id] = true end
+        end
+    end
+    return t
+end
+
+local function saveLocalVisited(map)
+    local lines = {}
+    for id in pairs(map) do
+        table.insert(lines, id)
+    end
+    pcall(writefile, CONFIG.LOCAL_VISITED_FILE, table.concat(lines, "\n"))
+end
+
+local localVisited = loadLocalVisited()
+localVisited[JobId] = true
+saveLocalVisited(localVisited)
+
+-- ========== Shared JSONBin ==========
+local function getSharedData()
+    if not requestFunc then
+        return { servers = {}, visited = {} }
+    end
 
     local response = requestFunc({
         Url = "https://api.jsonbin.io/v3/b/" .. CONFIG.JSONBIN_ID .. "/latest",
@@ -30,287 +101,265 @@ local function getData()
     })
 
     if response and response.Body then
-        local ok, data = pcall(function() return HttpService:JSONDecode(response.Body) end)
-        if ok and data and data.record and data.record.servers then
-            return data.record.servers
-        end
-    end
-    return nil
-end
-
-local function createGUI()
-    if PlayerGui:FindFirstChild("InfernoViewerGUI") then
-        PlayerGui.InfernoViewerGUI:Destroy()
-    end
-
-    local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "InfernoViewerGUI"
-    screenGui.ResetOnSpawn = false
-    screenGui.Parent = PlayerGui
-
-    local main = Instance.new("Frame")
-    main.Name = "Main"
-    main.Size = UDim2.new(0, 400, 0, 460)
-    main.Position = UDim2.new(0.5, -200, 0.5, -230)
-    main.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
-    main.Active = true
-    main.Draggable = true
-    main.Parent = screenGui
-    Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
-
-    -- Title
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, 0, 0, 38)
-    title.BackgroundColor3 = Color3.fromRGB(28, 28, 34)
-    title.Text = "  🔥 Inferno Finds"
-    title.TextColor3 = Color3.new(1,1,1)
-    title.Font = Enum.Font.GothamBold
-    title.TextSize = 16
-    title.TextXAlignment = Enum.TextXAlignment.Left
-    title.Parent = main
-    Instance.new("UICorner", title).CornerRadius = UDim.new(0, 12)
-
-    -- Search box
-    local searchBox = Instance.new("TextBox")
-    searchBox.Name = "SearchBox"
-    searchBox.Size = UDim2.new(1, -20, 0, 32)
-    searchBox.Position = UDim2.new(0, 10, 0, 48)
-    searchBox.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
-    searchBox.PlaceholderText = "Search pet / owner..."
-    searchBox.Text = ""
-    searchBox.TextColor3 = Color3.new(1,1,1)
-    searchBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 130)
-    searchBox.Font = Enum.Font.Gotham
-    searchBox.TextSize = 14
-    searchBox.ClearTextOnFocus = false
-    searchBox.Parent = main
-    Instance.new("UICorner", searchBox).CornerRadius = UDim.new(0, 8)
-
-    -- Status
-    local status = Instance.new("TextLabel")
-    status.Name = "Status"
-    status.Size = UDim2.new(1, -20, 0, 18)
-    status.Position = UDim2.new(0, 10, 0, 86)
-    status.BackgroundTransparency = 1
-    status.Text = "Loading..."
-    status.TextColor3 = Color3.fromRGB(140, 140, 150)
-    status.Font = Enum.Font.Gotham
-    status.TextSize = 12
-    status.TextXAlignment = Enum.TextXAlignment.Left
-    status.Parent = main
-
-    -- List
-    local list = Instance.new("ScrollingFrame")
-    list.Name = "List"
-    list.Size = UDim2.new(1, -20, 1, -140)
-    list.Position = UDim2.new(0, 10, 0, 108)
-    list.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
-    list.ScrollBarThickness = 3
-    list.CanvasSize = UDim2.new(0, 0, 0, 0)
-    list.Parent = main
-    Instance.new("UICorner", list).CornerRadius = UDim.new(0, 8)
-
-    local layout = Instance.new("UIListLayout")
-    layout.Padding = UDim.new(0, 8)
-    layout.Parent = list
-    layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-        list.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 12)
-    end)
-
-    -- Close
-    local closeBtn = Instance.new("TextButton")
-    closeBtn.Size = UDim2.new(0, 70, 0, 28)
-    closeBtn.Position = UDim2.new(1, -80, 1, -36)
-    closeBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 60)
-    closeBtn.Text = "Close"
-    closeBtn.TextColor3 = Color3.new(1,1,1)
-    closeBtn.Font = Enum.Font.GothamBold
-    closeBtn.TextSize = 13
-    closeBtn.Parent = main
-    Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 6)
-    closeBtn.MouseButton1Click:Connect(function()
-        screenGui:Destroy()
-    end)
-
-    return screenGui, searchBox
-end
-
-local function clearList(list)
-    for _, child in ipairs(list:GetChildren()) do
-        if child:IsA("Frame") then child:Destroy() end
-    end
-end
-
-local function addServerCard(list, server)
-    local card = Instance.new("Frame")
-    card.Size = UDim2.new(1, -8, 0, 0)
-    card.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
-    card.Parent = list
-    Instance.new("UICorner", card).CornerRadius = UDim.new(0, 8)
-
-    local cardLayout = Instance.new("UIListLayout")
-    cardLayout.Padding = UDim.new(0, 3)
-    cardLayout.Parent = card
-
-    local pad = Instance.new("UIPadding")
-    pad.PaddingTop = UDim.new(0, 10)
-    pad.PaddingBottom = UDim.new(0, 10)
-    pad.PaddingLeft = UDim.new(0, 12)
-    pad.PaddingRight = UDim.new(0, 12)
-    pad.Parent = card
-
-    -- Header
-    local header = Instance.new("Frame")
-    header.Size = UDim2.new(1, 0, 0, 28)
-    header.BackgroundTransparency = 1
-    header.Parent = card
-
-    local timeLabel = Instance.new("TextLabel")
-    timeLabel.Size = UDim2.new(1, -80, 1, 0)
-    timeLabel.BackgroundTransparency = 1
-    timeLabel.Text = string.format("%s  •  %s players", server.time or "?", server.players or "?")
-    timeLabel.TextColor3 = Color3.fromRGB(160, 160, 170)
-    timeLabel.Font = Enum.Font.Gotham
-    timeLabel.TextSize = 12
-    timeLabel.TextXAlignment = Enum.TextXAlignment.Left
-    timeLabel.Parent = header
-
-    local joinBtn = Instance.new("TextButton")
-    joinBtn.Size = UDim2.new(0, 70, 0, 26)
-    joinBtn.Position = UDim2.new(1, -70, 0, 1)
-    joinBtn.BackgroundColor3 = Color3.fromRGB(50, 120, 220)
-    joinBtn.Text = "Join"
-    joinBtn.TextColor3 = Color3.new(1,1,1)
-    joinBtn.Font = Enum.Font.GothamBold
-    joinBtn.TextSize = 13
-    joinBtn.Parent = header
-    Instance.new("UICorner", joinBtn).CornerRadius = UDim.new(0, 6)
-
-    local robloxLink = server.robloxLink or string.format(
-        "roblox://experiences/start?placeId=%s&gameInstanceId=%s",
-        tostring(server.placeId), tostring(server.jobId)
-    )
-
-joinBtn.MouseButton1Click:Connect(function()
-    local placeId = tonumber(server.placeId)
-    local jobId = server.jobId
-
-    if not placeId or not jobId then
-        joinBtn.Text = "Invalid"
-        task.delay(1, function()
-            if joinBtn and joinBtn.Parent then joinBtn.Text = "Join" end
+        local ok, data = pcall(function()
+            return HttpService:JSONDecode(response.Body)
         end)
-        return
-    end
-
-    joinBtn.Text = "Joining..."
-    
-    local TeleportService = game:GetService("TeleportService")
-    local ok, err = pcall(function()
-        TeleportService:TeleportToPlaceInstance(placeId, jobId, LocalPlayer)
-    end)
-
-    if not ok then
-        warn("Teleport failed:", err)
-        joinBtn.Text = "Failed"
-        -- still copy link as backup
-        if setclipboard then
-            local link = string.format(
-                "roblox://experiences/start?placeId=%s&gameInstanceId=%s",
-                tostring(placeId), tostring(jobId)
-            )
-            setclipboard(link)
-        end
-        task.delay(1.5, function()
-            if joinBtn and joinBtn.Parent then joinBtn.Text = "Join" end
-        end)
-    end
-end)
-
-    -- Booths / pets
-    for _, booth in ipairs(server.booths or {}) do
-        local owner = Instance.new("TextLabel")
-        owner.Size = UDim2.new(1, 0, 0, 18)
-        owner.BackgroundTransparency = 1
-        owner.Text = "👤 " .. tostring(booth.owner)
-        owner.TextColor3 = Color3.fromRGB(255, 190, 90)
-        owner.Font = Enum.Font.GothamBold
-        owner.TextSize = 13
-        owner.TextXAlignment = Enum.TextXAlignment.Left
-        owner.Parent = card
-
-        for _, pet in ipairs(booth.pets or {}) do
-            local row = Instance.new("TextLabel")
-            row.Size = UDim2.new(1, 0, 0, 16)
-            row.BackgroundTransparency = 1
-            row.Text = string.format("  • %s (%s) | %s | Lv.%s | %s Tokens",
-                pet.type, pet.name, pet.weight, pet.level, pet.price)
-            row.TextColor3 = Color3.fromRGB(210, 210, 220)
-            row.Font = Enum.Font.Gotham
-            row.TextSize = 12
-            row.TextXAlignment = Enum.TextXAlignment.Left
-            row.Parent = card
+        if ok and data and data.record then
+            return {
+                servers = data.record.servers or {},
+                visited = data.record.visited or {}
+            }
         end
     end
-
-    task.defer(function()
-        card.Size = UDim2.new(1, -8, 0, cardLayout.AbsoluteContentSize.Y + 20)
-    end)
+    return { servers = {}, visited = {} }
 end
 
-local function matchesFilter(server, filter)
-    if filter == "" then return true end
-    filter = string.lower(filter)
+local function saveSharedData(servers, visited)
+    if not requestFunc then return false end
+    local response = requestFunc({
+        Url = "https://api.jsonbin.io/v3/b/" .. CONFIG.JSONBIN_ID,
+        Method = "PUT",
+        Headers = {
+            ["Content-Type"] = "application/json",
+            ["X-Access-Key"] = CONFIG.JSONBIN_API_KEY
+        },
+        Body = HttpService:JSONEncode({
+            servers = servers or {},
+            visited = visited or {}
+        })
+    })
+    return response and (response.StatusCode == 200 or response.StatusCode == 201)
+end
 
-    for _, booth in ipairs(server.booths or {}) do
-        if string.find(string.lower(tostring(booth.owner)), filter, 1, true) then
-            return true
+local function addVisited(jobId)
+    localVisited[jobId] = true
+    saveLocalVisited(localVisited)
+
+    local data = getSharedData()
+    local visited = data.visited
+    local servers = data.servers
+
+    local found = false
+    for _, id in ipairs(visited) do
+        if id == jobId then
+            found = true
+            break
         end
-        for _, pet in ipairs(booth.pets or {}) do
-            if string.find(string.lower(tostring(pet.type)), filter, 1, true)
-            or string.find(string.lower(tostring(pet.name)), filter, 1, true) then
-                return true
+    end
+
+    if not found then
+        table.insert(visited, 1, jobId)
+        while #visited > CONFIG.MAX_VISITED do
+            table.remove(visited)
+        end
+        saveSharedData(servers, visited)
+    end
+
+    return visited, servers
+end
+
+local function getFullVisitedMap()
+    local data = getSharedData()
+    local map = {}
+
+    for id in pairs(localVisited) do
+        map[id] = true
+    end
+    for _, id in ipairs(data.visited or {}) do
+        map[id] = true
+    end
+    for _, s in ipairs(data.servers or {}) do
+        if s.jobId then
+            map[s.jobId] = true
+        end
+    end
+    map[JobId] = true
+
+    return map, data.visited or {}, data.servers or {}
+end
+
+-- ========== Scan ==========
+local function scanBooths()
+    local results = {}
+    local TradeWorld = workspace:FindFirstChild("TradeWorld")
+    if not TradeWorld then return results end
+    local Booths = TradeWorld:FindFirstChild("Booths")
+    if not Booths then return results end
+
+    for _, booth in ipairs(Booths:GetChildren()) do
+        pcall(function()
+            if ListingController.SetBooth then
+                ListingController:SetBooth(booth.Name)
+            end
+            ListingController.BoothUUID = booth.Name
+            if ListingController.RefreshDisplay then
+                ListingController:RefreshDisplay()
+            end
+        end)
+        task.wait(0.25)
+
+        local ok, inventory = pcall(function()
+            return ListingController:GetInventory()
+        end)
+
+        if ok and typeof(inventory) == "table" and #inventory > 0 then
+            local owner = tostring(inventory[1].listingOwner or "?")
+            local pets = {}
+
+            for _, listing in ipairs(inventory) do
+                local data = listing.data or {}
+                local petData = data.PetData or {}
+                local mutation = getMutationName(petData.MutationType)
+                local price = tonumber(listing.listingPrice) or 0
+
+                if mutation == "Inferno"
+                and price >= CONFIG.MIN_PRICE
+                and price <= CONFIG.MAX_PRICE then
+                    table.insert(pets, {
+                        type = tostring(data.PetType or "?"),
+                        name = tostring(petData.Name or "?"),
+                        weight = getCurrentWeight(petData.BaseWeight, petData.Level),
+                        level = tostring(petData.Level or "?"),
+                        price = price
+                    })
+                end
+            end
+
+            if #pets > 0 then
+                table.insert(results, {
+                    owner = owner,
+                    pets = pets
+                })
             end
         end
     end
-    return false
+
+    return results
 end
 
-local function renderList(gui)
-    local main = gui:FindFirstChild("Main")
-    if not main then return end
-    local list = main:FindFirstChild("List")
-    local status = main:FindFirstChild("Status")
-    if not list or not status then return end
+-- ========== Upload ==========
+local function uploadResults(results)
+    addVisited(JobId)
 
-    clearList(list)
+    if #results == 0 then
+        print("No matching pets → not uploading")
+        return
+    end
 
-    local shown = 0
-    for _, server in ipairs(currentServers) do
-        if matchesFilter(server, currentFilter) then
-            addServerCard(list, server)
-            shown = shown + 1
+    local _, visited, servers = getFullVisitedMap()
+
+    for i = #servers, 1, -1 do
+        if servers[i].jobId == JobId then
+            table.remove(servers, i)
         end
     end
 
-    status.Text = string.format("Showing %d / %d servers", shown, #currentServers)
+    table.insert(servers, 1, {
+        jobId = JobId,
+        placeId = PlaceId,
+        link = getJoinLink(),
+        robloxLink = getRobloxLink(),
+        players = #Players:GetPlayers(),
+        time = os.date("%H:%M:%S"),
+        booths = results
+    })
+
+    while #servers > CONFIG.MAX_STORED do
+        table.remove(servers)
+    end
+
+    if saveSharedData(servers, visited) then
+        print("✅ Uploaded | Stored:", #servers)
+    else
+        print("❌ Upload failed")
+    end
 end
 
-local gui, searchBox = createGUI()
-print("Viewer GUI started")
+-- ========== Hop (never revisit) ==========
+local function serverHop()
+    if not requestFunc then return end
 
-searchBox:GetPropertyChangedSignal("Text"):Connect(function()
-    currentFilter = searchBox.Text
-    renderList(gui)
-end)
+    addVisited(JobId)
 
-task.spawn(function()
-    while gui and gui.Parent do
-        local servers = getData()
-        if servers then
-            currentServers = servers
-            renderList(gui)
-        end
-        task.wait(CONFIG.REFRESH_EVERY)
+    local visitedMap = getFullVisitedMap()
+    local tried = {}
+    local originalJobId = game.JobId
+
+    local count = 0
+    for _ in pairs(visitedMap) do
+        count = count + 1
     end
-end)
+    print("Blocked JobIds:", count)
+
+    for attempt = 1, 50 do
+        print("Looking for NEW unvisited server... (" .. attempt .. "/50)")
+
+        if attempt % 3 == 0 then
+            visitedMap = getFullVisitedMap()
+        end
+
+        local response = requestFunc({
+            Url = "https://games.roblox.com/v1/games/" .. PlaceId .. "/servers/Public?sortOrder=Desc&limit=100",
+            Method = "GET"
+        })
+
+        if response and response.Body then
+            local ok, list = pcall(function()
+                return HttpService:JSONDecode(response.Body)
+            end)
+
+            if ok and list and list.data then
+                for _, server in ipairs(list.data) do
+                    local sid = server.id
+
+                    if server.playing >= CONFIG.MIN_PLAYERS
+                    and server.playing <= CONFIG.MAX_PLAYERS
+                    and sid ~= originalJobId
+                    and not tried[sid]
+                    and not visitedMap[sid] then
+
+                        -- mark BEFORE teleport so other account skips it
+                        tried[sid] = true
+                        addVisited(sid)
+                        visitedMap[sid] = true
+
+                        print("Hopping →", sid, "| Players:", server.playing)
+
+                        pcall(function()
+                            TeleportService:TeleportToPlaceInstance(PlaceId, sid, LocalPlayer)
+                        end)
+
+                        for i = 1, 7 do
+                            task.wait(1)
+                            if game.JobId ~= originalJobId then
+                                print("Teleport success →", game.JobId)
+                                addVisited(game.JobId)
+                                return
+                            end
+                        end
+
+                        print("Teleport failed, trying next unvisited...")
+                    end
+                end
+            end
+        end
+
+        task.wait(2)
+    end
+
+    -- NO random Teleport(PlaceId) fallback
+    print("No new unvisited server found — waiting 8s then retrying hop")
+    task.wait(8)
+    serverHop()
+end
+
+-- ========== Main ==========
+print("Current JobId:", JobId)
+addVisited(JobId)
+
+local results = scanBooths()
+uploadResults(results)
+
+print("Waiting", CONFIG.HOP_DELAY, "s before hop...")
+task.wait(CONFIG.HOP_DELAY)
+serverHop()
