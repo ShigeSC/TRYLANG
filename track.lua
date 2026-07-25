@@ -13,8 +13,8 @@ local CONFIG = {
     HOP_DELAY = 8,
     MIN_PLAYERS = 15,
     MAX_PLAYERS = 25,
-    MIN_PRICE = 400,
-    MAX_PRICE = 800,
+    MIN_PRICE = 1,
+    MAX_PRICE = 600,
     MAX_STORED = 20,
     MAX_VISITED = 60,
 }
