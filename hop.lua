@@ -208,6 +208,9 @@ local customJobIds = {}
 local customJobIndex = 1
 local petHistory = {}
 local cleanupEnabled = false
+local webhookEnabled = false
+local webhookUrl = "https://discord.com/api/webhooks/1531370747170259145/CcWzZasAXVgedW4TOP-3AXXT7WUryve7loGpr2zUGFCIU7h22zSroSPBLbAM2v9SceZe"
+local lastDisconnectWebhookAt = 0
 -- This records the saved toggle state until the worker function exists.
 local resumePetProtectOnLoad = false
 local playerStats = {}
@@ -331,6 +334,52 @@ local function Notify(title, content, duration)
     end)
 end
 
+-- =========================================================
+-- WEBHOOK ALERTS
+-- =========================================================
+local function sendWebhook(title, description, color)
+    if not webhookEnabled or webhookUrl == "" then return false end
+
+    local requestFn = (syn and syn.request) or http_request or request
+    if type(requestFn) ~= "function" then
+        warn("[AutoBuyPet] Webhook request function is unavailable in this executor.")
+        return false
+    end
+
+    local body = HttpService:JSONEncode({
+        username = "ScoopHub | AUTO BUY PET V1.6",
+        embeds = {{
+            title = title,
+            description = description,
+            color = color or 15158203,
+            footer = { text = "ScoopHub • " .. LocalPlayer.Name },
+        }},
+    })
+
+    task.spawn(function()
+        pcall(function()
+            requestFn({
+                Url = webhookUrl,
+                Method = "POST",
+                Headers = { ["Content-Type"] = "application/json" },
+                Body = body,
+            })
+        end)
+    end)
+    return true
+end
+
+pcall(function()
+    GuiService.ErrorMessageChanged:Connect(function(message)
+        local lowerMessage = string.lower(tostring(message or ""))
+        if (lowerMessage:find("error code: 279", 1, true) or lowerMessage:find("failed to connect", 1, true))
+            and tick() - lastDisconnectWebhookAt > 20 then
+            lastDisconnectWebhookAt = tick()
+            sendWebhook("Disconnected", "Roblox reported a connection failure (Error 279).", 15158332)
+        end
+    end)
+end)
+
 -- ScoopHub cleanup behavior: remove decoration/effects, simplify geometry,
 -- and lighten the scene for maximum FPS.
 local function applyLowCPU()
@@ -397,6 +446,8 @@ function saveSettings()
         petPunchRadius = petPunchRadius,
         autoRejoin = autoRejoin,
         cleanupEnabled = cleanupEnabled,
+        webhookEnabled = webhookEnabled,
+        webhookUrl = webhookUrl,
         customJobIds = customJobIds,
         customJobIndex = customJobIndex,
         petProtectEnabled = petProtectEnabled,
@@ -447,6 +498,8 @@ local function loadSettings()
     petPunchRadius = tonumber(data.petPunchRadius) or 16
     autoRejoin = data.autoRejoin == true
     cleanupEnabled = data.cleanupEnabled == true
+    webhookEnabled = data.webhookEnabled == true
+    webhookUrl = type(data.webhookUrl) == "string" and data.webhookUrl or ""
     if type(data.customJobIds) == "table" then
         customJobIds = data.customJobIds
     end
@@ -901,7 +954,7 @@ local TabUnderline = New("Frame", {
     BackgroundColor3 = Theme.Red,
     BorderSizePixel = 0,
     Position = UDim2.new(0, 0, 1, -2),
-    Size = UDim2.new(1 / 3, 0, 0, 2),
+    Size = UDim2.new(1 / 4, 0, 0, 2),
     ZIndex = 2,
 }, TabBar)
 
@@ -928,6 +981,14 @@ local HistoryPage = New("Frame", {
     Size = UDim2.new(1, 0, 1, -48),
 }, Body)
 
+local WebhookPage = New("Frame", {
+    Name = "WebhookPage",
+    BackgroundTransparency = 1,
+    Visible = false,
+    Position = UDim2.new(0, 0, 0, 42),
+    Size = UDim2.new(1, 0, 1, -48),
+}, Body)
+
 local updateHistoryUI
 local TabButtons = {}
 local function CreateTabButton(name, order)
@@ -939,8 +1000,8 @@ local function CreateTabButton(name, order)
         TextColor3 = Theme.TextDim,
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
-        Position = UDim2.new((order - 1) / 3, 0, 0, 0),
-        Size = UDim2.new(1 / 3, 0, 1, 0),
+        Position = UDim2.new((order - 1) / 4, 0, 0, 0),
+        Size = UDim2.new(1 / 4, 0, 1, 0),
     }, TabBar)
     TabButtons[name] = button
     return button
@@ -949,20 +1010,23 @@ end
 local AutoBuyTab = CreateTabButton("AUTO BUY PET", 1)
 local SettingsTab = CreateTabButton("SETTINGS", 2)
 local HistoryTab = CreateTabButton("HISTORY", 3)
+local WebhookTab = CreateTabButton("WEBHOOK", 4)
 
 local function setActiveTab(tabName)
     AutoBuyPage.Visible = tabName == "AUTO BUY PET"
     SettingsPage.Visible = tabName == "SETTINGS"
     HistoryPage.Visible = tabName == "HISTORY"
+    WebhookPage.Visible = tabName == "WEBHOOK"
     for name, button in pairs(TabButtons) do
         local active = name == tabName
         button.TextColor3 = active and Theme.Red or Theme.TextDim
         button.Font = active and Theme.Font or Theme.FontBody
         button.BackgroundTransparency = 1
     end
-    local tabOrder = tabName == "AUTO BUY PET" and 0 or (tabName == "SETTINGS" and 1 or 2)
+    local tabOrder = tabName == "AUTO BUY PET" and 0
+        or (tabName == "SETTINGS" and 1 or (tabName == "HISTORY" and 2 or 3))
     SafeTween(TabUnderline, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-        Position = UDim2.new(tabOrder / 3, 0, 1, -2),
+        Position = UDim2.new(tabOrder / 4, 0, 1, -2),
     })
     if tabName ~= "AUTO BUY PET" then
         local dropdown = Body:FindFirstChild("PetDropdown")
@@ -976,6 +1040,7 @@ end
 AutoBuyTab.Activated:Connect(function() setActiveTab("AUTO BUY PET") end)
 SettingsTab.Activated:Connect(function() setActiveTab("SETTINGS") end)
 HistoryTab.Activated:Connect(function() setActiveTab("HISTORY") end)
+WebhookTab.Activated:Connect(function() setActiveTab("WEBHOOK") end)
 setActiveTab("AUTO BUY PET")
 
 -- =========================================================
@@ -2005,6 +2070,161 @@ updateHistoryUI = function()
     end
 end
 
+-- =========================================================
+-- WEBHOOK TAB
+-- =========================================================
+local WebhookPanel = CreatePanel(WebhookPage, "WebhookPanel", UDim2.new(0, 12, 0, 12), UDim2.new(1, -24, 1, -24), "WEBHOOK ALERTS")
+
+New("TextLabel", {
+    Text = "Receive an alert for every secured pet, plus a best-effort Error 279 disconnect alert.",
+    Font = Theme.FontBody,
+    TextSize = 12,
+    TextColor3 = Theme.Muted,
+    BackgroundTransparency = 1,
+    Position = UDim2.new(0, 12, 0, 28),
+    Size = UDim2.new(1, -24, 0, 30),
+    TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, WebhookPanel)
+
+New("TextLabel", {
+    Text = "Discord Webhook URL",
+    Font = Theme.Font,
+    TextSize = 12,
+    TextColor3 = Theme.TextDim,
+    BackgroundTransparency = 1,
+    Position = UDim2.new(0, 12, 0, 70),
+    Size = UDim2.new(1, -24, 0, 14),
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, WebhookPanel)
+
+local WebhookUrlBox = New("TextBox", {
+    Name = "WebhookUrlBox",
+    Text = "",
+    PlaceholderText = "https://discord.com/api/webhooks/...",
+    Font = Theme.FontBody,
+    TextSize = 12,
+    TextColor3 = Theme.InputText,
+    PlaceholderColor3 = Theme.Muted,
+    BackgroundColor3 = Theme.InputBg,
+    BorderSizePixel = 0,
+    ClearTextOnFocus = false,
+    Position = UDim2.new(0, 12, 0, 88),
+    Size = UDim2.new(1, -24, 0, 28),
+}, WebhookPanel)
+New("UICorner", { CornerRadius = UDim.new(0, 5) }, WebhookUrlBox)
+New("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, WebhookUrlBox)
+
+New("TextLabel", {
+    Text = "Enable Webhook",
+    Font = Theme.Font,
+    TextSize = 12,
+    TextColor3 = Theme.TextDim,
+    BackgroundTransparency = 1,
+    Position = UDim2.new(0, 12, 0, 132),
+    Size = UDim2.new(1, -100, 0, 14),
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, WebhookPanel)
+New("TextLabel", {
+    Text = "Pet secured + connection alerts",
+    Font = Theme.FontBody,
+    TextSize = 11,
+    TextColor3 = Theme.Muted,
+    BackgroundTransparency = 1,
+    Position = UDim2.new(0, 12, 0, 147),
+    Size = UDim2.new(1, -100, 0, 14),
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, WebhookPanel)
+
+local WebhookToggle = New("TextButton", {
+    Name = "WebhookToggle",
+    Text = "",
+    BackgroundColor3 = Theme.RedDark,
+    BorderSizePixel = 0,
+    Position = UDim2.new(1, -62, 0, 135),
+    Size = UDim2.new(0, 48, 0, 24),
+}, WebhookPanel)
+New("UICorner", { CornerRadius = UDim.new(1, 0) }, WebhookToggle)
+local WebhookKnob = New("Frame", {
+    Name = "WebhookKnob",
+    BackgroundColor3 = Theme.White,
+    BorderSizePixel = 0,
+    AnchorPoint = Vector2.new(0, 0.5),
+    Position = UDim2.new(0, 3, 0.5, 0),
+    Size = UDim2.new(0, 18, 0, 18),
+}, WebhookToggle)
+New("UICorner", { CornerRadius = UDim.new(1, 0) }, WebhookKnob)
+
+local TestWebhookButton = New("TextButton", {
+    Text = "SEND TEST ALERT",
+    Font = Theme.Font,
+    TextSize = 12,
+    TextColor3 = Theme.White,
+    BackgroundColor3 = Theme.RedDark,
+    BorderSizePixel = 0,
+    Position = UDim2.new(0, 12, 0, 180),
+    Size = UDim2.new(1, -24, 0, 30),
+}, WebhookPanel)
+New("UICorner", { CornerRadius = UDim.new(0, 5) }, TestWebhookButton)
+
+local WebhookStatusLabel = New("TextLabel", {
+    Name = "WebhookStatusLabel",
+    Text = "Webhook is OFF",
+    Font = Theme.FontBody,
+    TextSize = 11,
+    TextColor3 = Theme.Muted,
+    BackgroundTransparency = 1,
+    Position = UDim2.new(0, 12, 0, 218),
+    Size = UDim2.new(1, -24, 0, 18),
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, WebhookPanel)
+
+local function updateWebhookUI()
+    WebhookUrlBox.Text = webhookUrl
+    WebhookToggle.BackgroundColor3 = webhookEnabled and Theme.Success or Theme.RedDark
+    SafeTween(WebhookKnob, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        Position = webhookEnabled and UDim2.new(1, -21, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
+    })
+    if webhookEnabled and webhookUrl ~= "" then
+        WebhookStatusLabel.Text = "Webhook alerts are enabled and saved."
+        WebhookStatusLabel.TextColor3 = Theme.Success
+    elseif webhookEnabled then
+        WebhookStatusLabel.Text = "Add a Discord webhook URL before enabling alerts."
+        WebhookStatusLabel.TextColor3 = Theme.Text
+    else
+        WebhookStatusLabel.Text = "Webhook is OFF"
+        WebhookStatusLabel.TextColor3 = Theme.Muted
+    end
+end
+
+WebhookUrlBox.FocusLost:Connect(function()
+    webhookUrl = tostring(WebhookUrlBox.Text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    saveSettings()
+    updateWebhookUI()
+end)
+
+WebhookToggle.Activated:Connect(function()
+    if not webhookEnabled and webhookUrl == "" then
+        Notify("Webhook", "Paste your Discord webhook URL first.", 2)
+        return
+    end
+    webhookEnabled = not webhookEnabled
+    saveSettings()
+    updateWebhookUI()
+end)
+
+TestWebhookButton.Activated:Connect(function()
+    if not webhookEnabled or webhookUrl == "" then
+        Notify("Webhook", "Enable Webhook and add a URL first.", 2)
+        return
+    end
+    if sendWebhook("Webhook Connected", "Test alert from AUTO BUY PET V1.6.", 5763719) then
+        Notify("Webhook", "Test alert sent.", 2)
+    else
+        Notify("Webhook", "Your executor does not support webhook requests.", 3)
+    end
+end)
+
 local shecklesValueObject = nil
 
 local function readNumber(value)
@@ -2439,6 +2659,13 @@ local function setPetProtectEnabled(enabled)
                         saveSettings()
                         updateStatusUI()
                         if updateHistoryUI then updateHistoryUI() end
+                        sendWebhook(
+                            "Pet Secured: " .. petName,
+                            "Rarity: " .. rarity .. "\nPoints earned: +" .. points
+                                .. "\nTotal pets: " .. petsBought
+                                .. "\nTotal points: " .. totalPoints,
+                            5763719
+                        )
                         Notify("Secured!", petName .. " bought! " .. rarity .. " +" .. points .. " points", 2)
                         break
                     end
@@ -2609,6 +2836,7 @@ updateJobIdsUI()
 rebuildJobIdList()
 if updateHistoryUI then updateHistoryUI() end
 updateCleanupUI()
+updateWebhookUI()
 if cleanupEnabled then
     setCleanupEnabled(true)
 end
