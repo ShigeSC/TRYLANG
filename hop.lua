@@ -206,6 +206,7 @@ local autoRejoin = false
 local customJobIds = {}
 local customJobIndex = 1
 local petHistory = {}
+local cleanupEnabled = false
 -- This records the saved toggle state until the worker function exists.
 local resumePetProtectOnLoad = false
 local playerStats = {}
@@ -329,6 +330,47 @@ local function Notify(title, content, duration)
     end)
 end
 
+-- ScoopHub cleanup behavior: remove decoration/effects, simplify geometry,
+-- and lighten the scene for maximum FPS.
+local function applyLowCPU()
+    if not cleanupEnabled then return end
+
+    local Workspace = game:GetService("Workspace")
+    local Lighting = game:GetService("Lighting")
+    for _, item in ipairs(Workspace:GetDescendants()) do
+        local nameLower = item.Name:lower()
+        if nameLower:find("plant") or nameLower:find("tree") or nameLower:find("flower")
+            or nameLower:find("bush") or nameLower:find("crop") or nameLower:find("grass")
+            or nameLower:find("vine") or nameLower:find("mushroom") or nameLower:find("visual")
+            or nameLower:find("decoration") or nameLower:find("leaf") or nameLower:find("petals") then
+            pcall(function() item:Destroy() end)
+        end
+    end
+
+    for _, item in ipairs(Workspace:GetDescendants()) do
+        if item:IsA("BasePart") then
+            item.Material = Enum.Material.SmoothPlastic
+            item.Color = Color3.fromRGB(180, 180, 200)
+            item.Reflectance = 0
+        elseif item:IsA("Texture") or item:IsA("Decal") or item:IsA("ParticleEmitter")
+            or item:IsA("Trail") or item:IsA("Beam") then
+            pcall(function() item:Destroy() end)
+        end
+    end
+
+    Lighting.GlobalShadows = false
+    Lighting.Brightness = 2
+    Lighting.ClockTime = 12
+    Lighting.FogEnd = 100000
+end
+
+local function setCleanupEnabled(enabled)
+    cleanupEnabled = enabled == true
+    if cleanupEnabled then
+        applyLowCPU()
+    end
+end
+
 -- =========================================================
 -- CONFIG SAVE / LOAD
 -- =========================================================
@@ -353,6 +395,7 @@ function saveSettings()
         petWalkSpeed = petWalkSpeed,
         petPunchRadius = petPunchRadius,
         autoRejoin = autoRejoin,
+        cleanupEnabled = cleanupEnabled,
         customJobIds = customJobIds,
         customJobIndex = customJobIndex,
         petProtectEnabled = petProtectEnabled,
@@ -402,6 +445,7 @@ local function loadSettings()
     petWalkSpeed = tonumber(data.petWalkSpeed) or 32
     petPunchRadius = tonumber(data.petPunchRadius) or 16
     autoRejoin = data.autoRejoin == true
+    cleanupEnabled = data.cleanupEnabled == true
     if type(data.customJobIds) == "table" then
         customJobIds = data.customJobIds
     end
@@ -844,14 +888,22 @@ end
 -- =========================================================
 local TabBar = New("Frame", {
     Name = "TabBar",
-    BackgroundColor3 = Theme.Surface2,
-    BackgroundTransparency = 0.12,
+    BackgroundTransparency = 1,
     BorderSizePixel = 0,
     Position = UDim2.new(0, 12, 0, 8),
     Size = UDim2.new(1, -24, 0, 28),
 }, Body)
 New("UICorner", { CornerRadius = UDim.new(0, 6) }, TabBar)
-New("UIStroke", { Color = Theme.PanelLine, Thickness = 1, Transparency = 0.45 }, TabBar)
+New("UIStroke", { Color = Theme.PanelLine, Thickness = 1, Transparency = 0.42 }, TabBar)
+
+local TabUnderline = New("Frame", {
+    Name = "TabUnderline",
+    BackgroundColor3 = Theme.Red,
+    BorderSizePixel = 0,
+    Position = UDim2.new(0, 0, 1, -2),
+    Size = UDim2.new(1 / 3, 0, 0, 2),
+    ZIndex = 2,
+}, TabBar)
 
 local AutoBuyPage = New("Frame", {
     Name = "AutoBuyPage",
@@ -906,9 +958,12 @@ local function setActiveTab(tabName)
         local active = name == tabName
         button.TextColor3 = active and Theme.Red or Theme.TextDim
         button.Font = active and Theme.Font or Theme.FontBody
-        button.BackgroundColor3 = active and Color3.fromRGB(61, 20, 29) or Theme.Surface2
-        button.BackgroundTransparency = active and 0.15 or 1
+        button.BackgroundTransparency = 1
     end
+    local tabOrder = tabName == "AUTO BUY PET" and 0 or (tabName == "SETTINGS" and 1 or 2)
+    SafeTween(TabUnderline, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        Position = UDim2.new(tabOrder / 3, 0, 1, -2),
+    })
     if tabName ~= "AUTO BUY PET" then
         local dropdown = Body:FindFirstChild("PetDropdown")
         if dropdown then dropdown.Visible = false end
@@ -1314,7 +1369,7 @@ end)
 -- =========================================================
 -- RIGHT PANEL — SETTINGS
 -- =========================================================
-local SettingsPanel = CreatePanel(SettingsPage, "SettingsPanel", UDim2.new(0, 12, 0, 12), UDim2.new(1, -24, 0, 200), "BUY & MOVEMENT")
+local SettingsPanel = CreatePanel(SettingsPage, "SettingsPanel", UDim2.new(0, 12, 0, 12), UDim2.new(1, -24, 0, 140), "BUY & MOVEMENT")
 
 New("TextLabel", {
     Text = "Max Price",
@@ -1323,7 +1378,7 @@ New("TextLabel", {
     TextColor3 = Theme.TextDim,
     BackgroundTransparency = 1,
     Position = UDim2.new(0, 12, 0, 28),
-    Size = UDim2.new(1, -24, 0, 14),
+    Size = UDim2.new(1/3, -16, 0, 14),
     TextXAlignment = Enum.TextXAlignment.Left,
 }, SettingsPanel)
 
@@ -1338,7 +1393,7 @@ local PriceBox = New("TextBox", {
     BackgroundColor3 = Theme.InputBg,
     BorderSizePixel = 0,
     Position = UDim2.new(0, 12, 0, 46),
-    Size = UDim2.new(1, -24, 0, 28),
+    Size = UDim2.new(1/3, -16, 0, 28),
     ClearTextOnFocus = false,
 }, SettingsPanel)
 New("UICorner", { CornerRadius = UDim.new(0, 5) }, PriceBox)
@@ -1360,8 +1415,8 @@ New("TextLabel", {
     TextSize = 12,
     TextColor3 = Theme.TextDim,
     BackgroundTransparency = 1,
-    Position = UDim2.new(0, 12, 0, 84),
-    Size = UDim2.new(1, -24, 0, 14),
+    Position = UDim2.new(1/3, 4, 0, 28),
+    Size = UDim2.new(1/3, -16, 0, 14),
     TextXAlignment = Enum.TextXAlignment.Left,
 }, SettingsPanel)
 
@@ -1375,8 +1430,8 @@ local SpeedBox = New("TextBox", {
     PlaceholderColor3 = Theme.Muted,
     BackgroundColor3 = Theme.InputBg,
     BorderSizePixel = 0,
-    Position = UDim2.new(0, 12, 0, 102),
-    Size = UDim2.new(1, -24, 0, 28),
+    Position = UDim2.new(1/3, 4, 0, 46),
+    Size = UDim2.new(1/3, -16, 0, 28),
     ClearTextOnFocus = false,
 }, SettingsPanel)
 New("UICorner", { CornerRadius = UDim.new(0, 5) }, SpeedBox)
@@ -1399,8 +1454,8 @@ New("TextLabel", {
     TextSize = 12,
     TextColor3 = Theme.TextDim,
     BackgroundTransparency = 1,
-    Position = UDim2.new(0, 12, 0, 140),
-    Size = UDim2.new(1, -24, 0, 14),
+    Position = UDim2.new(2/3, -4, 0, 28),
+    Size = UDim2.new(1/3, -8, 0, 14),
     TextXAlignment = Enum.TextXAlignment.Left,
 }, SettingsPanel)
 
@@ -1414,8 +1469,8 @@ local RadiusBox = New("TextBox", {
     PlaceholderColor3 = Theme.Muted,
     BackgroundColor3 = Theme.InputBg,
     BorderSizePixel = 0,
-    Position = UDim2.new(0, 12, 0, 158),
-    Size = UDim2.new(1, -24, 0, 28),
+    Position = UDim2.new(2/3, -4, 0, 46),
+    Size = UDim2.new(1/3, -8, 0, 28),
     ClearTextOnFocus = false,
 }, SettingsPanel)
 New("UICorner", { CornerRadius = UDim.new(0, 5) }, RadiusBox)
@@ -1432,10 +1487,65 @@ RadiusBox.FocusLost:Connect(function()
     end
 end)
 
+New("TextLabel", {
+    Text = "Enable Cleanup",
+    Font = Theme.Font,
+    TextSize = 12,
+    TextColor3 = Theme.TextDim,
+    BackgroundTransparency = 1,
+    Position = UDim2.new(0, 12, 0, 88),
+    Size = UDim2.new(1, -100, 0, 14),
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, SettingsPanel)
+
+New("TextLabel", {
+    Text = "Remove plants, trees, and effects for better FPS",
+    Font = Theme.FontBody,
+    TextSize = 11,
+    TextColor3 = Theme.Muted,
+    BackgroundTransparency = 1,
+    Position = UDim2.new(0, 12, 0, 103),
+    Size = UDim2.new(1, -100, 0, 14),
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, SettingsPanel)
+
+local CleanupToggle = New("TextButton", {
+    Name = "CleanupToggle",
+    Text = "",
+    BackgroundColor3 = Theme.RedDark,
+    BorderSizePixel = 0,
+    Position = UDim2.new(1, -62, 0, 91),
+    Size = UDim2.new(0, 48, 0, 24),
+}, SettingsPanel)
+New("UICorner", { CornerRadius = UDim.new(1, 0) }, CleanupToggle)
+local CleanupKnob = New("Frame", {
+    Name = "CleanupKnob",
+    BackgroundColor3 = Theme.White,
+    BorderSizePixel = 0,
+    AnchorPoint = Vector2.new(0, 0.5),
+    Position = UDim2.new(0, 3, 0.5, 0),
+    Size = UDim2.new(0, 18, 0, 18),
+}, CleanupToggle)
+New("UICorner", { CornerRadius = UDim.new(1, 0) }, CleanupKnob)
+
+local function updateCleanupUI()
+    CleanupToggle.BackgroundColor3 = cleanupEnabled and Theme.Success or Theme.RedDark
+    SafeTween(CleanupKnob, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        Position = cleanupEnabled and UDim2.new(1, -21, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
+    })
+end
+
+CleanupToggle.Activated:Connect(function()
+    setCleanupEnabled(not cleanupEnabled)
+    updateCleanupUI()
+    saveSettings()
+    Notify("Cleanup", cleanupEnabled and "ScoopHub cleanup enabled." or "Cleanup disabled. A rejoin restores removed visuals.", 2)
+end)
+
 -- =========================================================
 -- SETTINGS TAB — OPTIONAL SERVER ROTATION
 -- =========================================================
-local JobIdPanel = CreatePanel(SettingsPage, "JobIdPanel", UDim2.new(0, 12, 0, 224), UDim2.new(1, -24, 0, 176), "SERVER HOP ROTATION")
+local JobIdPanel = CreatePanel(SettingsPage, "JobIdPanel", UDim2.new(0, 12, 0, 164), UDim2.new(1, -24, 1, -176), "SERVER HOP ROTATION")
 
 New("TextLabel", {
     Text = "Add Job IDs to hop through them in order. Leave empty for random 1-6 player servers.",
@@ -1444,7 +1554,7 @@ New("TextLabel", {
     TextColor3 = Theme.Muted,
     BackgroundTransparency = 1,
     Position = UDim2.new(0, 12, 0, 27),
-    Size = UDim2.new(1, -24, 0, 26),
+    Size = UDim2.new(1, -24, 0, 18),
     TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, JobIdPanel)
@@ -1460,7 +1570,7 @@ local JobIdInput = New("TextBox", {
     BackgroundColor3 = Theme.InputBg,
     BorderSizePixel = 0,
     ClearTextOnFocus = false,
-    Position = UDim2.new(0, 12, 0, 60),
+    Position = UDim2.new(0, 12, 0, 50),
     Size = UDim2.new(1, -112, 0, 28),
 }, JobIdPanel)
 New("UICorner", { CornerRadius = UDim.new(0, 5) }, JobIdInput)
@@ -1473,37 +1583,71 @@ local AddJobIdButton = New("TextButton", {
     TextColor3 = Theme.White,
     BackgroundColor3 = Theme.Red,
     BorderSizePixel = 0,
-    Position = UDim2.new(1, -92, 0, 60),
+    Position = UDim2.new(1, -92, 0, 50),
     Size = UDim2.new(0, 80, 0, 28),
 }, JobIdPanel)
 New("UICorner", { CornerRadius = UDim.new(0, 5) }, AddJobIdButton)
 
 local JobIdsLabel = New("TextLabel", {
     Name = "JobIdsLabel",
+    Visible = false,
     Text = "No saved Job IDs — random hopping is active.",
     Font = Theme.FontBody,
     TextSize = 11,
     TextColor3 = Theme.TextDim,
     BackgroundTransparency = 1,
-    Position = UDim2.new(0, 12, 0, 98),
-    Size = UDim2.new(1, -112, 0, 60),
+    Position = UDim2.new(0, 12, 0, 84),
+    Size = UDim2.new(1, -112, 0, 42),
     TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left,
     TextYAlignment = Enum.TextYAlignment.Top,
 }, JobIdPanel)
 
 local ClearJobIdsButton = New("TextButton", {
-    Text = "CLEAR\nIDS",
+    Text = "CLEAR ALL",
     Font = Theme.Font,
     TextSize = 10,
     TextColor3 = Theme.White,
     BackgroundColor3 = Theme.RedDark,
     BorderSizePixel = 0,
-    Position = UDim2.new(1, -92, 0, 104),
-    Size = UDim2.new(0, 80, 0, 42),
-    TextWrapped = true,
+    Position = UDim2.new(1, -92, 1, -36),
+    Size = UDim2.new(0, 80, 0, 24),
 }, JobIdPanel)
 New("UICorner", { CornerRadius = UDim.new(0, 5) }, ClearJobIdsButton)
+
+local JobIdList = New("ScrollingFrame", {
+    Name = "JobIdList",
+    BackgroundColor3 = Theme.Surface2,
+    BackgroundTransparency = 0.2,
+    BorderSizePixel = 0,
+    Position = UDim2.new(0, 12, 0, 86),
+    Size = UDim2.new(1, -24, 1, -130),
+    CanvasSize = UDim2.new(0, 0, 0, 0),
+    AutomaticCanvasSize = Enum.AutomaticSize.Y,
+    ScrollBarThickness = 4,
+    ScrollBarImageColor3 = Theme.Red,
+}, JobIdPanel)
+New("UICorner", { CornerRadius = UDim.new(0, 5) }, JobIdList)
+New("UIPadding", {
+    PaddingTop = UDim.new(0, 4),
+    PaddingBottom = UDim.new(0, 4),
+    PaddingLeft = UDim.new(0, 5),
+    PaddingRight = UDim.new(0, 5),
+}, JobIdList)
+New("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, JobIdList)
+
+local JobRouteLabel = New("TextLabel", {
+    Name = "JobRouteLabel",
+    Text = "Random 1-6 player servers are active.",
+    Font = Theme.FontBody,
+    TextSize = 10,
+    TextColor3 = Theme.Muted,
+    BackgroundTransparency = 1,
+    Position = UDim2.new(0, 12, 1, -34),
+    Size = UDim2.new(1, -112, 0, 22),
+    TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, JobIdPanel)
 
 local function updateJobIdsUI()
     if #customJobIds == 0 then
@@ -1516,6 +1660,70 @@ local function updateJobIdsUI()
         table.insert(lines, marker .. index .. ". " .. tostring(jobId))
     end
     JobIdsLabel.Text = table.concat(lines, "\n")
+end
+
+local function rebuildJobIdList()
+    for _, child in ipairs(JobIdList:GetChildren()) do
+        if child.Name == "JobIdRow" or child.Name == "EmptyJobIds" then
+            child:Destroy()
+        end
+    end
+
+    if #customJobIds == 0 then
+        JobRouteLabel.Text = "Random 1-6 player servers are active."
+        New("TextLabel", {
+            Name = "EmptyJobIds",
+            Text = "No saved Job IDs. Add one above to use a custom rotation.",
+            Font = Theme.FontBody,
+            TextSize = 11,
+            TextColor3 = Theme.Muted,
+            BackgroundTransparency = 1,
+            Size = UDim2.new(1, 0, 0, 32),
+            TextXAlignment = Enum.TextXAlignment.Center,
+        }, JobIdList)
+        return
+    end
+
+    JobRouteLabel.Text = #customJobIds .. " saved server" .. (#customJobIds == 1 and " — rotates in order." or "s — rotates in order.")
+    for index, jobId in ipairs(customJobIds) do
+        local row = New("Frame", {
+            Name = "JobIdRow",
+            LayoutOrder = index,
+            BackgroundColor3 = index == customJobIndex and Color3.fromRGB(62, 23, 31) or Theme.Surface3,
+            BackgroundTransparency = 0.15,
+            BorderSizePixel = 0,
+            Size = UDim2.new(1, 0, 0, 28),
+        }, JobIdList)
+        New("UICorner", { CornerRadius = UDim.new(0, 4) }, row)
+        New("TextLabel", {
+            Text = (index == customJobIndex and "NEXT  " or "") .. tostring(jobId),
+            Font = Theme.FontBody,
+            TextSize = 11,
+            TextColor3 = index == customJobIndex and Theme.White or Theme.Muted,
+            BackgroundTransparency = 1,
+            Position = UDim2.new(0, 8, 0, 0),
+            Size = UDim2.new(1, -42, 1, 0),
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            TextXAlignment = Enum.TextXAlignment.Left,
+        }, row)
+        local removeButton = New("TextButton", {
+            Text = "X",
+            Font = Theme.Font,
+            TextSize = 12,
+            TextColor3 = Theme.Text,
+            BackgroundColor3 = Theme.RedDark,
+            BorderSizePixel = 0,
+            Position = UDim2.new(1, -26, 0, 3),
+            Size = UDim2.new(0, 22, 0, 22),
+        }, row)
+        New("UICorner", { CornerRadius = UDim.new(0, 4) }, removeButton)
+        removeButton.Activated:Connect(function()
+            table.remove(customJobIds, index)
+            customJobIndex = #customJobIds > 0 and math.clamp(customJobIndex, 1, #customJobIds) or 1
+            rebuildJobIdList()
+            saveSettings()
+        end)
+    end
 end
 
 local function addJobId()
@@ -1533,6 +1741,7 @@ local function addJobId()
     table.insert(customJobIds, jobId)
     JobIdInput.Text = ""
     updateJobIdsUI()
+    rebuildJobIdList()
     saveSettings()
 end
 
@@ -1544,6 +1753,7 @@ ClearJobIdsButton.Activated:Connect(function()
     table.clear(customJobIds)
     customJobIndex = 1
     updateJobIdsUI()
+    rebuildJobIdList()
     saveSettings()
     Notify("Server Hop", "Custom Job ID rotation cleared.", 2)
 end)
@@ -1556,6 +1766,7 @@ local function getNextCustomJobId()
         customJobIndex = (customJobIndex % #customJobIds) + 1
         if jobId ~= game.JobId then
             updateJobIdsUI()
+            rebuildJobIdList()
             return jobId
         end
     end
@@ -1671,13 +1882,39 @@ local HistoryPointsLabel = New("TextLabel", {
     TextXAlignment = Enum.TextXAlignment.Right,
 }, HistoryPanel)
 
+local HistoryColumns = New("Frame", {
+    Name = "HistoryColumns",
+    BackgroundColor3 = Theme.Surface3,
+    BackgroundTransparency = 0.28,
+    BorderSizePixel = 0,
+    Position = UDim2.new(0, 12, 0, 28),
+    Size = UDim2.new(1, -24, 0, 20),
+}, HistoryPanel)
+New("UICorner", { CornerRadius = UDim.new(0, 4) }, HistoryColumns)
+
+local function CreateHistoryColumn(text, position, size, alignment)
+    New("TextLabel", {
+        Text = text,
+        Font = Theme.Font,
+        TextSize = 10,
+        TextColor3 = Theme.TextDim,
+        BackgroundTransparency = 1,
+        Position = position,
+        Size = size,
+        TextXAlignment = alignment,
+    }, HistoryColumns)
+end
+CreateHistoryColumn("PET NAME", UDim2.new(0, 10, 0, 0), UDim2.new(0.55, -10, 1, 0), Enum.TextXAlignment.Left)
+CreateHistoryColumn("AMOUNT", UDim2.new(0.55, 0, 0, 0), UDim2.new(0.2, 0, 1, 0), Enum.TextXAlignment.Center)
+CreateHistoryColumn("POINTS", UDim2.new(0.75, 0, 0, 0), UDim2.new(0.25, -10, 1, 0), Enum.TextXAlignment.Right)
+
 local HistoryScroll = New("ScrollingFrame", {
     Name = "HistoryScroll",
     BackgroundColor3 = Theme.Surface2,
     BackgroundTransparency = 0.22,
     BorderSizePixel = 0,
-    Position = UDim2.new(0, 12, 0, 28),
-    Size = UDim2.new(1, -24, 1, -80),
+    Position = UDim2.new(0, 12, 0, 52),
+    Size = UDim2.new(1, -24, 1, -104),
     CanvasSize = UDim2.new(0, 0, 0, 0),
     ScrollBarThickness = 4,
     ScrollBarImageColor3 = Theme.Red,
@@ -1740,17 +1977,29 @@ updateHistoryUI = function()
             TextColor3 = Theme.White,
             BackgroundTransparency = 1,
             Position = UDim2.new(0, 10, 0, 0),
-            Size = UDim2.new(0.7, -10, 1, 0),
+            Size = UDim2.new(0.55, -10, 1, 0),
             TextXAlignment = Enum.TextXAlignment.Left,
         }, row)
         New("TextLabel", {
-            Text = "x" .. tostring(petHistory[petName]),
+            Text = tostring(petHistory[petName]),
             Font = Theme.Font,
             TextSize = 13,
             TextColor3 = Theme.Success,
             BackgroundTransparency = 1,
-            Position = UDim2.new(0.7, 0, 0, 0),
-            Size = UDim2.new(0.3, -10, 1, 0),
+            Position = UDim2.new(0.55, 0, 0, 0),
+            Size = UDim2.new(0.2, 0, 1, 0),
+            TextXAlignment = Enum.TextXAlignment.Center,
+        }, row)
+        local rarity = PET_RARITY_OVERRIDES[petName]
+        local points = (RARITY_POINTS[rarity] or 0) * (tonumber(petHistory[petName]) or 0)
+        New("TextLabel", {
+            Text = tostring(points),
+            Font = Theme.Font,
+            TextSize = 13,
+            TextColor3 = Color3.fromRGB(255, 208, 105),
+            BackgroundTransparency = 1,
+            Position = UDim2.new(0.75, 0, 0, 0),
+            Size = UDim2.new(0.25, -10, 1, 0),
             TextXAlignment = Enum.TextXAlignment.Right,
         }, row)
     end
@@ -2356,7 +2605,12 @@ rebuildTargetList()
 updateRejoinUI()
 updateStatusUI()
 updateJobIdsUI()
+rebuildJobIdList()
 if updateHistoryUI then updateHistoryUI() end
+updateCleanupUI()
+if cleanupEnabled then
+    setCleanupEnabled(true)
+end
 
 -- Currency can change without any action in this hub, so refresh just this
 -- status line in the background instead of waiting for another UI update.
