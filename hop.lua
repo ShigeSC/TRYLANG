@@ -1333,8 +1333,8 @@ local BoughtLabel = New("TextLabel", {
     TextSize = 14,
     TextColor3 = Theme.Success,
     BackgroundTransparency = 1,
-    Position = UDim2.new(0, 12, 0, 52),
-    Size = UDim2.new(1, -24, 0, 20),
+    Position = UDim2.new(0, 12, 0, 48),
+    Size = UDim2.new(1, -24, 0, 18),
     TextXAlignment = Enum.TextXAlignment.Left,
 }, StatusPanel)
 
@@ -1345,8 +1345,20 @@ local PointsLabel = New("TextLabel", {
     TextSize = 14,
     TextColor3 = Color3.fromRGB(255, 208, 105),
     BackgroundTransparency = 1,
-    Position = UDim2.new(0, 12, 0, 76),
-    Size = UDim2.new(1, -24, 0, 20),
+    Position = UDim2.new(0, 12, 0, 68),
+    Size = UDim2.new(1, -24, 0, 18),
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, StatusPanel)
+
+local ShecklesLabel = New("TextLabel", {
+    Name = "ShecklesLabel",
+    Text = "Sheckles: Loading...",
+    Font = Theme.Font,
+    TextSize = 14,
+    TextColor3 = Color3.fromRGB(123, 222, 151),
+    BackgroundTransparency = 1,
+    Position = UDim2.new(0, 12, 0, 88),
+    Size = UDim2.new(1, -24, 0, 18),
     TextXAlignment = Enum.TextXAlignment.Left,
 }, StatusPanel)
 
@@ -1357,10 +1369,10 @@ local TargetLabel = New("TextLabel", {
     TextSize = 12,
     TextColor3 = Theme.Muted,
     BackgroundTransparency = 1,
-    Position = UDim2.new(0, 12, 0, 100),
-    Size = UDim2.new(1, -24, 0, 36),
+    Position = UDim2.new(0, 12, 0, 108),
+    Size = UDim2.new(1, -24, 0, 18),
     TextXAlignment = Enum.TextXAlignment.Left,
-    TextWrapped = true,
+    TextTruncate = Enum.TextTruncate.AtEnd,
 }, StatusPanel)
 
 local ToggleButton = New("TextButton", {
@@ -1377,6 +1389,58 @@ local ToggleButton = New("TextButton", {
 New("UICorner", { CornerRadius = UDim.new(0, 6) }, ToggleButton)
 New("UIStroke", { Color = Color3.fromRGB(255, 150, 157), Thickness = 1, Transparency = 0.55 }, ToggleButton)
 
+local shecklesValueObject = nil
+
+local function readNumber(value)
+    if type(value) == "number" then return value end
+    if type(value) == "string" then
+        return tonumber(value:gsub("[^%d%-%.]", ""))
+    end
+    return nil
+end
+
+local function formatSheckles(value)
+    local suffixes = {
+        { 1000000000000, "T" },
+        { 1000000000, "B" },
+        { 1000000, "M" },
+        { 1000, "K" },
+    }
+    for _, unit in ipairs(suffixes) do
+        if value >= unit[1] then
+            local text = string.format("%.1f", value / unit[1]):gsub("%.0$", "")
+            return text .. unit[2]
+        end
+    end
+    return tostring(math.floor(value))
+end
+
+local function getSheckles()
+    -- Prefer the actual replicated player stat, then fall back to a matching
+    -- player attribute.  The found ValueBase is cached for cheap live updates.
+    if shecklesValueObject and shecklesValueObject.Parent then
+        return readNumber(shecklesValueObject.Value)
+    end
+
+    local directAttribute = readNumber(LocalPlayer:GetAttribute("Sheckles"))
+        or readNumber(LocalPlayer:GetAttribute("Scheckles"))
+    if directAttribute ~= nil then return directAttribute end
+
+    for _, item in ipairs(LocalPlayer:GetDescendants()) do
+        local name = string.lower(item.Name)
+        if (name == "sheckles" or name == "scheckles") and item:IsA("ValueBase") then
+            shecklesValueObject = item
+            return readNumber(item.Value)
+        end
+    end
+    return nil
+end
+
+local function updateShecklesUI()
+    local sheckles = getSheckles()
+    ShecklesLabel.Text = sheckles and ("Sheckles: " .. formatSheckles(sheckles)) or "Sheckles: Not found"
+end
+
 local function updateStatusUI()
     if petProtectEnabled then
         StatusLabel.Text = "Protection: ON"
@@ -1391,6 +1455,7 @@ local function updateStatusUI()
     end
     BoughtLabel.Text = "Pets Bought By " .. LocalPlayer.Name .. ": " .. petsBought
     PointsLabel.Text = "Points: " .. totalPoints
+    updateShecklesUI()
     TargetLabel.Text = "Targets: " .. formatList(targetPetNames)
 end
 
@@ -1908,6 +1973,15 @@ RadiusBox.Text = tostring(petPunchRadius)
 rebuildTargetList()
 updateRejoinUI()
 updateStatusUI()
+
+-- Currency can change without any action in this hub, so refresh just this
+-- status line in the background instead of waiting for another UI update.
+task.spawn(function()
+    while ScreenGui.Parent do
+        updateShecklesUI()
+        task.wait(0.5)
+    end
+end)
 
 -- Restore exactly what the user chose before the previous teleport.
 -- Do this immediately: rebuildTargetList above saves the temporary OFF
