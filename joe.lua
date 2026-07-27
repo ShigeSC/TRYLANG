@@ -200,9 +200,33 @@ local petWalkSpeed = 32
 local petPunchRadius = 16
 local petProtectThread = nil
 local petsBought = 0
+local totalPoints = 0
 local autoRejoin = false
 -- This records the saved toggle state until the worker function exists.
 local resumePetProtectOnLoad = false
+local playerStats = {}
+local currentPlayerKey = tostring(LocalPlayer.UserId)
+
+local RARITY_POINTS = {
+    Common = 5,
+    Uncommon = 10,
+    Rare = 15,
+    Legendary = 25,
+    Mythic = 40,
+    Super = 500,
+}
+
+-- Optional fallback for games that do not expose a Rarity attribute on the
+-- wild-pet model. Add only confirmed name-to-rarity pairs here.
+local PET_RARITY_OVERRIDES = {}
+
+local function storeCurrentPlayerStats()
+    playerStats[currentPlayerKey] = {
+        username = LocalPlayer.Name,
+        petsBought = petsBought,
+        points = totalPoints,
+    }
+end
 
 local AllPets = {
     "Bunny", "Frog",
@@ -278,6 +302,8 @@ local CONFIG_FILE = CONFIG_FOLDER .. "/settings.json"
 function saveSettings()
     if not (writefile and isfolder and makefolder) then return end
 
+    storeCurrentPlayerStats()
+
     pcall(function()
         if not isfolder(CONFIG_FOLDER) then
             makefolder(CONFIG_FOLDER)
@@ -291,6 +317,7 @@ function saveSettings()
         petPunchRadius = petPunchRadius,
         autoRejoin = autoRejoin,
         petProtectEnabled = petProtectEnabled,
+        playerStats = playerStats,
     }
 
     for name, isOn in pairs(selectedPets) do
@@ -337,6 +364,14 @@ local function loadSettings()
     petPunchRadius = tonumber(data.petPunchRadius) or 16
     autoRejoin = data.autoRejoin == true
     resumePetProtectOnLoad = data.petProtectEnabled == true
+    if type(data.playerStats) == "table" then
+        playerStats = data.playerStats
+    end
+    local savedStats = playerStats[currentPlayerKey]
+    if type(savedStats) == "table" then
+        petsBought = tonumber(savedStats.petsBought) or 0
+        totalPoints = tonumber(savedStats.points) or 0
+    end
     -- Keep the in-memory setting identical to the JSON value. The worker is
     -- still started later through setPetProtectEnabled after setup is ready.
     petProtectEnabled = resumePetProtectOnLoad
@@ -1154,12 +1189,24 @@ local StatusLabel = New("TextLabel", {
 
 local BoughtLabel = New("TextLabel", {
     Name = "BoughtLabel",
-    Text = "Pets bought this session: 0",
+    Text = "Pets Bought From This (" .. LocalPlayer.Name .. "): 0",
     Font = Theme.Font,
     TextSize = 14,
     TextColor3 = Theme.Success,
     BackgroundTransparency = 1,
     Position = UDim2.new(0, 12, 0, 52),
+    Size = UDim2.new(1, -24, 0, 20),
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, StatusPanel)
+
+local PointsLabel = New("TextLabel", {
+    Name = "PointsLabel",
+    Text = "ysteystem: 0",
+    Font = Theme.Font,
+    TextSize = 14,
+    TextColor3 = Color3.fromRGB(255, 208, 105),
+    BackgroundTransparency = 1,
+    Position = UDim2.new(0, 12, 0, 76),
     Size = UDim2.new(1, -24, 0, 20),
     TextXAlignment = Enum.TextXAlignment.Left,
 }, StatusPanel)
@@ -1171,7 +1218,7 @@ local TargetLabel = New("TextLabel", {
     TextSize = 12,
     TextColor3 = Theme.Muted,
     BackgroundTransparency = 1,
-    Position = UDim2.new(0, 12, 0, 76),
+    Position = UDim2.new(0, 12, 0, 100),
     Size = UDim2.new(1, -24, 0, 36),
     TextXAlignment = Enum.TextXAlignment.Left,
     TextWrapped = true,
@@ -1203,8 +1250,46 @@ local function updateStatusUI()
         ToggleButton.Text = "ENABLE AUTO BUY PET"
         ToggleButton.BackgroundColor3 = Theme.Red
     end
-    BoughtLabel.Text = "Pets bought this session: " .. petsBought
+    BoughtLabel.Text = "Pets Bought By " .. LocalPlayer.Name .. ": " .. petsBought
+    PointsLabel.Text = "Points: " .. totalPoints
     TargetLabel.Text = "Targets: " .. formatList(targetPetNames)
+end
+
+local function normalizeRarity(value)
+    if type(value) ~= "string" then return nil end
+    local lowered = string.lower(value)
+    for rarity in pairs(RARITY_POINTS) do
+        if lowered == string.lower(rarity) then
+            return rarity
+        end
+    end
+    return nil
+end
+
+local function getPetRarityAndPoints(pet)
+    local override = PET_RARITY_OVERRIDES[pet.Name]
+    if override and RARITY_POINTS[override] then
+        return override, RARITY_POINTS[override]
+    end
+
+    for _, attributeName in ipairs({ "Rarity", "PetRarity", "Tier" }) do
+        local rarity = normalizeRarity(pet:GetAttribute(attributeName))
+        if rarity then return rarity, RARITY_POINTS[rarity] end
+
+        local valueObject = pet:FindFirstChild(attributeName, true)
+        if valueObject and valueObject:IsA("StringValue") then
+            rarity = normalizeRarity(valueObject.Value)
+            if rarity then return rarity, RARITY_POINTS[rarity] end
+        end
+    end
+
+    for rarity, points in pairs(RARITY_POINTS) do
+        if string.find(string.lower(pet.Name), string.lower(rarity), 1, true) then
+            return rarity, points
+        end
+    end
+
+    return "Unknown", 0
 end
 
 -- =========================================================
@@ -1394,10 +1479,16 @@ local function setPetProtectEnabled(enabled)
                 noPetTimer = 0
 
                 while petProtectEnabled do
-                    if not pet or not pet.Parent then
+                    if not pet then
+                        break
+                    end
+                    if not pet.Parent then
+                        local rarity, points = getPetRarityAndPoints(pet)
                         petsBought = petsBought + 1
+                        totalPoints = totalPoints + points
+                        saveSettings()
                         updateStatusUI()
-                        Notify("Secured!", pet.Name .. " bought! Total: " .. petsBought, 2)
+                        Notify("Secured!", pet.Name .. " bought! " .. rarity .. " +" .. points .. " points", 2)
                         break
                     end
 
