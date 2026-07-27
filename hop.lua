@@ -2226,8 +2226,7 @@ local function setPetProtectEnabled(enabled)
             local MIN_Y = -20
             local NO_PET_TIMEOUT = 18 -- seconds with no pets before rejoin
 
-            local RUN_SPEED = petWalkSpeed
-            humanoid.WalkSpeed = RUN_SPEED
+            humanoid.WalkSpeed = petWalkSpeed
             humanoid.AutoRotate = true
 
             local runTarget = nil
@@ -2282,7 +2281,9 @@ local function setPetProtectEnabled(enabled)
                 if hrp then
                     hrp.Anchored = false
                 end
-                humanoid.WalkSpeed = RUN_SPEED
+                -- Read the current setting every heartbeat so edits take
+                -- effect immediately without having to restart Auto Buy.
+                humanoid.WalkSpeed = petWalkSpeed
 
                 -- No matching pet: do not submit a MoveTo command. The player
                 -- keeps full manual control while the script waits.
