@@ -200,6 +200,8 @@ local petPunchRadius = 16
 local petProtectThread = nil
 local petsBought = 0
 local autoRejoin = false
+-- This records the saved toggle state until the worker function exists.
+local resumePetProtectOnLoad = false
 
 local AllPets = {
     "Bunny", "Frog",
@@ -333,7 +335,9 @@ local function loadSettings()
     petWalkSpeed = tonumber(data.petWalkSpeed) or 32
     petPunchRadius = tonumber(data.petPunchRadius) or 16
     autoRejoin = data.autoRejoin == true
-    -- Don't auto-enable on load, we'll handle that separately
+    resumePetProtectOnLoad = data.petProtectEnabled == true
+    -- Keep the live worker off during UI setup. It is started at the end
+    -- only when the saved setting says the user left it enabled.
     petProtectEnabled = false
 end
 
@@ -1538,6 +1542,15 @@ updateStatusUI()
 -- Set up KRNL queue if auto-rejoin was enabled
 if autoRejoin and isKRNL then
     enableKRNLQueue()
+end
+
+-- Restore exactly what the user chose before the previous teleport.
+-- Calling the toggle function (rather than only changing the variable)
+-- also starts the worker loop when the saved state was ON.
+if resumePetProtectOnLoad then
+    task.defer(function()
+        setPetProtectEnabled(true)
+    end)
 end
 
 print("[AutoBuyPet] Loaded — KRNL: " .. tostring(isKRNL) .. " | Auto Rejoin: " .. tostring(autoRejoin))
