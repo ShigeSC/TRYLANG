@@ -337,35 +337,69 @@ end
 -- =========================================================
 -- WEBHOOK ALERTS
 -- =========================================================
-local function sendWebhook(title, description, color)
+local WEBHOOK_RARITY_COLORS = {
+    Common = 5763719,
+    Uncommon = 5793266,
+    Rare = 3447003,
+    Legendary = 16766720,
+    Mythic = 10181046,
+    Super = 15158332,
+}
+local WEBHOOK_PET_PAGE_NAMES = {
+    GoldenDragonfly = "Golden Dragonfly",
+    BlackDragon = "Black Dragon",
+    IceSerpent = "Ice Serpent",
+    ShadowDragon = "Shadow Dragon",
+}
+
+local function getWebhookPetImage(petName)
+    local pageName = WEBHOOK_PET_PAGE_NAMES[petName] or petName
+    return "https://growagarden2.fandom.com/wiki/Special:Redirect/file/"
+        .. HttpService:UrlEncode(pageName .. ".png")
+end
+
+local function sendWebhook(title, description, color, fields, thumbnailUrl)
     if not webhookEnabled or webhookUrl == "" then return false end
 
-    local requestFn = (syn and syn.request) or http_request or request
+    local requestFn = (syn and syn.request)
+        or (http and http.request)
+        or http_request
+        or request
     if type(requestFn) ~= "function" then
         warn("[AutoBuyPet] Webhook request function is unavailable in this executor.")
         return false
     end
 
+    local embed = {
+        title = title,
+        description = description,
+        color = color or 15158203,
+        footer = { text = "AUTO BUY PET V1.6 • " .. LocalPlayer.Name },
+    }
+    if fields then embed.fields = fields end
+    if thumbnailUrl then embed.thumbnail = { url = thumbnailUrl } end
+
     local body = HttpService:JSONEncode({
         username = "ScoopHub | AUTO BUY PET V1.6",
-        embeds = {{
-            title = title,
-            description = description,
-            color = color or 15158203,
-            footer = { text = "ScoopHub • " .. LocalPlayer.Name },
-        }},
+        embeds = { embed },
     })
 
-    task.spawn(function()
-        pcall(function()
-            requestFn({
-                Url = webhookUrl,
-                Method = "POST",
-                Headers = { ["Content-Type"] = "application/json" },
-                Body = body,
-            })
-        end)
+    local requestOk, response = pcall(function()
+        return requestFn({
+            Url = webhookUrl,
+            Method = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = body,
+        })
     end)
+    if not requestOk then
+        return false, tostring(response)
+    end
+
+    local statusCode = type(response) == "table" and (response.StatusCode or response.Status)
+    if statusCode and (tonumber(statusCode) or 0) >= 300 then
+        return false, "Discord returned HTTP " .. tostring(statusCode)
+    end
     return true
 end
 
@@ -375,7 +409,16 @@ pcall(function()
         if (lowerMessage:find("error code: 279", 1, true) or lowerMessage:find("failed to connect", 1, true))
             and tick() - lastDisconnectWebhookAt > 20 then
             lastDisconnectWebhookAt = tick()
-            sendWebhook("Disconnected", "Roblox reported a connection failure (Error 279).", 15158332)
+            sendWebhook(
+                "⚠️ CONNECTION LOST",
+                "Roblox reported a connection failure (**Error 279**).",
+                15158332,
+                {
+                    { name = "TOTAL PETS", value = tostring(petsBought), inline = true },
+                    { name = "TOTAL POINTS", value = tostring(totalPoints), inline = true },
+                    { name = "SERVER", value = string.sub(game.JobId, 1, 8) .. "...", inline = true },
+                }
+            )
         end
     end)
 end)
@@ -2318,10 +2361,11 @@ TestWebhookButton.Activated:Connect(function()
         Notify("Webhook", "Enable Webhook and add a URL first.", 2)
         return
     end
-    if sendWebhook("Webhook Connected", "Test alert from AUTO BUY PET V1.6.", 5763719) then
-        Notify("Webhook", "Test alert sent.", 2)
+    local sent, reason = sendWebhook("Webhook Connected", "Test alert from AUTO BUY PET V1.6.", 5763719)
+    if sent then
+        Notify("Webhook", "Test alert delivered.", 2)
     else
-        Notify("Webhook", "Your executor does not support webhook requests.", 3)
+        Notify("Webhook", "Test failed: " .. tostring(reason or "request unavailable"), 4)
     end
 end)
 
@@ -2760,11 +2804,18 @@ local function setPetProtectEnabled(enabled)
                         updateStatusUI()
                         if updateHistoryUI then updateHistoryUI() end
                         sendWebhook(
-                            "Pet Secured: " .. petName,
-                            "Rarity: " .. rarity .. "\nPoints earned: +" .. points
-                                .. "\nTotal pets: " .. petsBought
-                                .. "\nTotal points: " .. totalPoints,
-                            5763719
+                            "🐾 PET SECURED",
+                            "**" .. petName .. "** was secured successfully.",
+                            WEBHOOK_RARITY_COLORS[rarity] or 5763719,
+                            {
+                                { name = "PET", value = petName, inline = true },
+                                { name = "RARITY", value = rarity, inline = true },
+                                { name = "POINTS", value = "+" .. points, inline = true },
+                                { name = "TOTAL PETS", value = tostring(petsBought), inline = true },
+                                { name = "TOTAL POINTS", value = tostring(totalPoints), inline = true },
+                                { name = "SERVER", value = string.sub(game.JobId, 1, 8) .. "...", inline = true },
+                            },
+                            getWebhookPetImage(petName)
                         )
                         Notify("Secured!", petName .. " bought! " .. rarity .. " +" .. points .. " points", 2)
                         break
