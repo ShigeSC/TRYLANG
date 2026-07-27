@@ -3010,3 +3010,4 @@ end
 
 print("[AutoBuyPet] Loaded: " .. tostring(isKRNL) .. " | SERVER HOPPING: " .. tostring(autoRejoin))
 Notify("Loaded", "Settings restored: " .. tostring(isKRNL), 3)
+-- end
