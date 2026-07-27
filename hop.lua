@@ -415,6 +415,7 @@ local function sendWebhook(title, description, color, fields, thumbnailUrl)
         title = title,
         description = description,
         color = color or 15158203,
+        -- Discord renders the timestamp below this footer as "Today at 3:18 AM".
         footer = { text = "AUTO BUY PET V1.6  •  discord.gg/WxgqUa9Qz" },
         timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
     }
@@ -3053,3 +3054,4 @@ end
 
 print("[AutoBuyPet] Loaded: " .. tostring(isKRNL) .. " | SERVER HOPPING: " .. tostring(autoRejoin))
 Notify("Loaded", "Settings restored: " .. tostring(isKRNL), 3)
+-- update
