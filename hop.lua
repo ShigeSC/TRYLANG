@@ -209,7 +209,7 @@ local customJobIndex = 1
 local petHistory = {}
 local cleanupEnabled = false
 local webhookEnabled = false
-local webhookUrl = "https://discord.com/api/webhooks/1531370747170259145/CcWzZasAXVgedW4TOP-3AXXT7WUryve7loGpr2zUGFCIU7h22zSroSPBLbAM2v9SceZe"
+local webhookUrl = ""
 local lastDisconnectWebhookAt = 0
 -- This records the saved toggle state until the worker function exists.
 local resumePetProtectOnLoad = false
