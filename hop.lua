@@ -1410,7 +1410,7 @@ PriceBox.FocusLost:Connect(function()
 end)
 
 New("TextLabel", {
-    Text = "Walk Speed (28-40 recommended)",
+    Text = "Walk Speed (28-40)",
     Font = Theme.Font,
     TextSize = 12,
     TextColor3 = Theme.TextDim,
