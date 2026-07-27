@@ -203,6 +203,9 @@ local petProtectThread = nil
 local petsBought = 0
 local totalPoints = 0
 local autoRejoin = false
+local customJobIds = {}
+local customJobIndex = 1
+local petHistory = {}
 -- This records the saved toggle state until the worker function exists.
 local resumePetProtectOnLoad = false
 local playerStats = {}
@@ -252,6 +255,7 @@ local function storeCurrentPlayerStats()
         username = LocalPlayer.Name,
         petsBought = petsBought,
         points = totalPoints,
+        history = petHistory,
     }
 end
 
@@ -349,6 +353,8 @@ function saveSettings()
         petWalkSpeed = petWalkSpeed,
         petPunchRadius = petPunchRadius,
         autoRejoin = autoRejoin,
+        customJobIds = customJobIds,
+        customJobIndex = customJobIndex,
         petProtectEnabled = petProtectEnabled,
         playerStats = playerStats,
     }
@@ -396,6 +402,10 @@ local function loadSettings()
     petWalkSpeed = tonumber(data.petWalkSpeed) or 32
     petPunchRadius = tonumber(data.petPunchRadius) or 16
     autoRejoin = data.autoRejoin == true
+    if type(data.customJobIds) == "table" then
+        customJobIds = data.customJobIds
+    end
+    customJobIndex = math.max(1, tonumber(data.customJobIndex) or 1)
     resumePetProtectOnLoad = data.petProtectEnabled == true
     if type(data.playerStats) == "table" then
         playerStats = data.playerStats
@@ -404,6 +414,9 @@ local function loadSettings()
     if type(savedStats) == "table" then
         petsBought = tonumber(savedStats.petsBought) or 0
         totalPoints = tonumber(savedStats.points) or 0
+        if type(savedStats.history) == "table" then
+            petHistory = savedStats.history
+        end
     end
     -- Keep the in-memory setting identical to the JSON value. The worker is
     -- still started later through setPetProtectEnabled after setup is ready.
@@ -429,7 +442,7 @@ local DropShadowHolder = New("Frame", {
     AnchorPoint = Vector2.new(0.5, 0.5),
     BackgroundTransparency = 1,
     BorderSizePixel = 0,
-    Size = UDim2.new(0, 520, 0, 460),
+    Size = UDim2.new(0, 520, 0, 500),
     ZIndex = 0,
     Name = "DropShadowHolder",
     Position = UDim2.new(0.5, 0, 0.5, 0),
@@ -445,7 +458,7 @@ local DropShadow = New("ImageLabel", {
     BackgroundTransparency = 1,
     BorderSizePixel = 0,
     Position = UDim2.new(0.5, 0, 0.5, 0),
-    Size = UDim2.new(0, 520, 0, 460),
+    Size = UDim2.new(0, 520, 0, 500),
     ZIndex = 0,
     Name = "DropShadow",
 }, DropShadowHolder)
@@ -457,7 +470,7 @@ local Main = New("Frame", {
     BorderSizePixel = 0,
     ClipsDescendants = true,
     Position = UDim2.new(0.5, 0, 0.5, 0),
-    Size = UDim2.new(0, 520, 0, 460),
+    Size = UDim2.new(0, 520, 0, 500),
     Name = "Main",
 }, DropShadow)
 
@@ -827,9 +840,93 @@ local function CreatePanel(parent, name, position, size, titleText)
 end
 
 -- =========================================================
+-- NAVIGATION
+-- =========================================================
+local TabBar = New("Frame", {
+    Name = "TabBar",
+    BackgroundColor3 = Theme.Surface2,
+    BackgroundTransparency = 0.12,
+    BorderSizePixel = 0,
+    Position = UDim2.new(0, 12, 0, 8),
+    Size = UDim2.new(1, -24, 0, 28),
+}, Body)
+New("UICorner", { CornerRadius = UDim.new(0, 6) }, TabBar)
+New("UIStroke", { Color = Theme.PanelLine, Thickness = 1, Transparency = 0.45 }, TabBar)
+
+local AutoBuyPage = New("Frame", {
+    Name = "AutoBuyPage",
+    BackgroundTransparency = 1,
+    Position = UDim2.new(0, 0, 0, 42),
+    Size = UDim2.new(1, 0, 1, -48),
+}, Body)
+
+local SettingsPage = New("Frame", {
+    Name = "SettingsPage",
+    BackgroundTransparency = 1,
+    Visible = false,
+    Position = UDim2.new(0, 0, 0, 42),
+    Size = UDim2.new(1, 0, 1, -48),
+}, Body)
+
+local HistoryPage = New("Frame", {
+    Name = "HistoryPage",
+    BackgroundTransparency = 1,
+    Visible = false,
+    Position = UDim2.new(0, 0, 0, 42),
+    Size = UDim2.new(1, 0, 1, -48),
+}, Body)
+
+local updateHistoryUI
+local TabButtons = {}
+local function CreateTabButton(name, order)
+    local button = New("TextButton", {
+        Name = name .. "Tab",
+        Text = name,
+        Font = Theme.Font,
+        TextSize = 11,
+        TextColor3 = Theme.TextDim,
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Position = UDim2.new((order - 1) / 3, 0, 0, 0),
+        Size = UDim2.new(1 / 3, 0, 1, 0),
+    }, TabBar)
+    TabButtons[name] = button
+    return button
+end
+
+local AutoBuyTab = CreateTabButton("AUTO BUY PET", 1)
+local SettingsTab = CreateTabButton("SETTINGS", 2)
+local HistoryTab = CreateTabButton("HISTORY", 3)
+
+local function setActiveTab(tabName)
+    AutoBuyPage.Visible = tabName == "AUTO BUY PET"
+    SettingsPage.Visible = tabName == "SETTINGS"
+    HistoryPage.Visible = tabName == "HISTORY"
+    for name, button in pairs(TabButtons) do
+        local active = name == tabName
+        button.TextColor3 = active and Theme.Red or Theme.TextDim
+        button.Font = active and Theme.Font or Theme.FontBody
+        button.BackgroundColor3 = active and Color3.fromRGB(61, 20, 29) or Theme.Surface2
+        button.BackgroundTransparency = active and 0.15 or 1
+    end
+    if tabName ~= "AUTO BUY PET" then
+        local dropdown = Body:FindFirstChild("PetDropdown")
+        if dropdown then dropdown.Visible = false end
+    end
+    if tabName == "HISTORY" and updateHistoryUI then
+        updateHistoryUI()
+    end
+end
+
+AutoBuyTab.Activated:Connect(function() setActiveTab("AUTO BUY PET") end)
+SettingsTab.Activated:Connect(function() setActiveTab("SETTINGS") end)
+HistoryTab.Activated:Connect(function() setActiveTab("HISTORY") end)
+setActiveTab("AUTO BUY PET")
+
+-- =========================================================
 -- LEFT PANEL — SELECT PETS
 -- =========================================================
-local PetsPanel = CreatePanel(Body, "PetsPanel", UDim2.new(0, 12, 0, 12), UDim2.new(0, 240, 0, 126), "SELECT PETS")
+local PetsPanel = CreatePanel(AutoBuyPage, "PetsPanel", UDim2.new(0, 12, 0, 12), UDim2.new(0, 240, 0, 126), "SELECT PETS")
 
 local SelectPetsButton = New("TextButton", {
     Name = "SelectPetsButton",
@@ -915,7 +1012,7 @@ New("UICorner", { CornerRadius = UDim.new(0, 5) }, RemoveAllPetsButton)
 -- REJOIN PANEL (now single toggle)
 -- =========================================================
 local RejoinPanel = CreatePanel(
-    Body,
+    AutoBuyPage,
     "RejoinPanel",
     UDim2.new(0, 12, 0, 148),
     UDim2.new(0, 240, 0, 64),
@@ -956,6 +1053,32 @@ RejoinToggle.Activated:Connect(function()
         Notify("Auto Server Hop", "Disabled", 2)
     end
 end)
+
+local QuickGuidePanel = CreatePanel(AutoBuyPage, "QuickGuidePanel", UDim2.new(0, 264, 0, 12), UDim2.new(1, -276, 0, 200), "QUICK GUIDE")
+New("TextLabel", {
+    Text = "1. Select the wild pets you want to secure.\n\n2. Enable Auto Buy Pet when you are ready.\n\n3. Use Settings for price, movement, and saved server Job IDs.",
+    Font = Theme.FontBody,
+    TextSize = 12,
+    TextColor3 = Theme.Muted,
+    BackgroundTransparency = 1,
+    Position = UDim2.new(0, 12, 0, 32),
+    Size = UDim2.new(1, -24, 0, 118),
+    TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    TextYAlignment = Enum.TextYAlignment.Top,
+}, QuickGuidePanel)
+New("TextLabel", {
+    Text = "HISTORY SAVES PER PLAYER",
+    Font = Theme.Font,
+    TextSize = 10,
+    TextColor3 = Theme.Success,
+    BackgroundColor3 = Color3.fromRGB(22, 58, 43),
+    BackgroundTransparency = 0.1,
+    BorderSizePixel = 0,
+    Position = UDim2.new(0, 12, 1, -34),
+    Size = UDim2.new(1, -24, 0, 22),
+    TextXAlignment = Enum.TextXAlignment.Center,
+}, QuickGuidePanel)
 
 -- Dropdown
 local PetDropdown = New("Frame", {
@@ -1191,7 +1314,7 @@ end)
 -- =========================================================
 -- RIGHT PANEL — SETTINGS
 -- =========================================================
-local SettingsPanel = CreatePanel(Body, "SettingsPanel", UDim2.new(0, 264, 0, 12), UDim2.new(1, -276, 0, 200), "SETTINGS")
+local SettingsPanel = CreatePanel(SettingsPage, "SettingsPanel", UDim2.new(0, 12, 0, 12), UDim2.new(1, -24, 0, 200), "BUY & MOVEMENT")
 
 New("TextLabel", {
     Text = "Max Price",
@@ -1310,9 +1433,139 @@ RadiusBox.FocusLost:Connect(function()
 end)
 
 -- =========================================================
+-- SETTINGS TAB — OPTIONAL SERVER ROTATION
+-- =========================================================
+local JobIdPanel = CreatePanel(SettingsPage, "JobIdPanel", UDim2.new(0, 12, 0, 224), UDim2.new(1, -24, 0, 176), "SERVER HOP ROTATION")
+
+New("TextLabel", {
+    Text = "Add Job IDs to hop through them in order. Leave empty for random 1-6 player servers.",
+    Font = Theme.FontBody,
+    TextSize = 11,
+    TextColor3 = Theme.Muted,
+    BackgroundTransparency = 1,
+    Position = UDim2.new(0, 12, 0, 27),
+    Size = UDim2.new(1, -24, 0, 26),
+    TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, JobIdPanel)
+
+local JobIdInput = New("TextBox", {
+    Name = "JobIdInput",
+    Text = "",
+    PlaceholderText = "Paste a server Job ID...",
+    Font = Theme.FontBody,
+    TextSize = 12,
+    TextColor3 = Theme.InputText,
+    PlaceholderColor3 = Theme.Muted,
+    BackgroundColor3 = Theme.InputBg,
+    BorderSizePixel = 0,
+    ClearTextOnFocus = false,
+    Position = UDim2.new(0, 12, 0, 60),
+    Size = UDim2.new(1, -112, 0, 28),
+}, JobIdPanel)
+New("UICorner", { CornerRadius = UDim.new(0, 5) }, JobIdInput)
+New("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, JobIdInput)
+
+local AddJobIdButton = New("TextButton", {
+    Text = "ADD ID",
+    Font = Theme.Font,
+    TextSize = 11,
+    TextColor3 = Theme.White,
+    BackgroundColor3 = Theme.Red,
+    BorderSizePixel = 0,
+    Position = UDim2.new(1, -92, 0, 60),
+    Size = UDim2.new(0, 80, 0, 28),
+}, JobIdPanel)
+New("UICorner", { CornerRadius = UDim.new(0, 5) }, AddJobIdButton)
+
+local JobIdsLabel = New("TextLabel", {
+    Name = "JobIdsLabel",
+    Text = "No saved Job IDs — random hopping is active.",
+    Font = Theme.FontBody,
+    TextSize = 11,
+    TextColor3 = Theme.TextDim,
+    BackgroundTransparency = 1,
+    Position = UDim2.new(0, 12, 0, 98),
+    Size = UDim2.new(1, -112, 0, 60),
+    TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    TextYAlignment = Enum.TextYAlignment.Top,
+}, JobIdPanel)
+
+local ClearJobIdsButton = New("TextButton", {
+    Text = "CLEAR\nIDS",
+    Font = Theme.Font,
+    TextSize = 10,
+    TextColor3 = Theme.White,
+    BackgroundColor3 = Theme.RedDark,
+    BorderSizePixel = 0,
+    Position = UDim2.new(1, -92, 0, 104),
+    Size = UDim2.new(0, 80, 0, 42),
+    TextWrapped = true,
+}, JobIdPanel)
+New("UICorner", { CornerRadius = UDim.new(0, 5) }, ClearJobIdsButton)
+
+local function updateJobIdsUI()
+    if #customJobIds == 0 then
+        JobIdsLabel.Text = "No saved Job IDs — random hopping is active."
+        return
+    end
+    local lines = {}
+    for index, jobId in ipairs(customJobIds) do
+        local marker = index == customJobIndex and "Next: " or "      "
+        table.insert(lines, marker .. index .. ". " .. tostring(jobId))
+    end
+    JobIdsLabel.Text = table.concat(lines, "\n")
+end
+
+local function addJobId()
+    local jobId = tostring(JobIdInput.Text or ""):gsub("%s+", "")
+    if jobId == "" then
+        Notify("Server Hop", "Paste a Job ID first.", 2)
+        return
+    end
+    for _, existingId in ipairs(customJobIds) do
+        if existingId == jobId then
+            Notify("Server Hop", "That Job ID is already in the rotation.", 2)
+            return
+        end
+    end
+    table.insert(customJobIds, jobId)
+    JobIdInput.Text = ""
+    updateJobIdsUI()
+    saveSettings()
+end
+
+AddJobIdButton.Activated:Connect(addJobId)
+JobIdInput.FocusLost:Connect(function(enterPressed)
+    if enterPressed then addJobId() end
+end)
+ClearJobIdsButton.Activated:Connect(function()
+    table.clear(customJobIds)
+    customJobIndex = 1
+    updateJobIdsUI()
+    saveSettings()
+    Notify("Server Hop", "Custom Job ID rotation cleared.", 2)
+end)
+
+local function getNextCustomJobId()
+    if #customJobIds == 0 then return nil end
+    customJobIndex = math.clamp(customJobIndex, 1, #customJobIds)
+    for _ = 1, #customJobIds do
+        local jobId = customJobIds[customJobIndex]
+        customJobIndex = (customJobIndex % #customJobIds) + 1
+        if jobId ~= game.JobId then
+            updateJobIdsUI()
+            return jobId
+        end
+    end
+    return nil
+end
+
+-- =========================================================
 -- STATUS + TOGGLE PANEL
 -- =========================================================
-local StatusPanel = CreatePanel(Body, "StatusPanel", UDim2.new(0, 12, 0, 222), UDim2.new(1, -24, 1, -234), "STATUS")
+local StatusPanel = CreatePanel(AutoBuyPage, "StatusPanel", UDim2.new(0, 12, 0, 222), UDim2.new(1, -24, 1, -234), "STATUS")
 
 local StatusLabel = New("TextLabel", {
     Name = "StatusLabel",
@@ -1388,6 +1641,120 @@ local ToggleButton = New("TextButton", {
 }, StatusPanel)
 New("UICorner", { CornerRadius = UDim.new(0, 6) }, ToggleButton)
 New("UIStroke", { Color = Color3.fromRGB(255, 150, 157), Thickness = 1, Transparency = 0.55 }, ToggleButton)
+
+-- =========================================================
+-- HISTORY TAB
+-- =========================================================
+local HistoryPanel = CreatePanel(HistoryPage, "HistoryPanel", UDim2.new(0, 12, 0, 12), UDim2.new(1, -24, 1, -24), "PET HISTORY")
+
+local HistoryTotalLabel = New("TextLabel", {
+    Name = "HistoryTotalLabel",
+    Text = "Total pets: 0",
+    Font = Theme.Font,
+    TextSize = 13,
+    TextColor3 = Theme.Success,
+    BackgroundTransparency = 1,
+    Position = UDim2.new(0, 12, 1, -44),
+    Size = UDim2.new(0.5, -12, 0, 20),
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, HistoryPanel)
+
+local HistoryPointsLabel = New("TextLabel", {
+    Name = "HistoryPointsLabel",
+    Text = "Total points: 0",
+    Font = Theme.Font,
+    TextSize = 13,
+    TextColor3 = Color3.fromRGB(255, 208, 105),
+    BackgroundTransparency = 1,
+    Position = UDim2.new(0.5, 0, 1, -44),
+    Size = UDim2.new(0.5, -12, 0, 20),
+    TextXAlignment = Enum.TextXAlignment.Right,
+}, HistoryPanel)
+
+local HistoryScroll = New("ScrollingFrame", {
+    Name = "HistoryScroll",
+    BackgroundColor3 = Theme.Surface2,
+    BackgroundTransparency = 0.22,
+    BorderSizePixel = 0,
+    Position = UDim2.new(0, 12, 0, 28),
+    Size = UDim2.new(1, -24, 1, -80),
+    CanvasSize = UDim2.new(0, 0, 0, 0),
+    ScrollBarThickness = 4,
+    ScrollBarImageColor3 = Theme.Red,
+    AutomaticCanvasSize = Enum.AutomaticSize.Y,
+}, HistoryPanel)
+New("UICorner", { CornerRadius = UDim.new(0, 6) }, HistoryScroll)
+New("UIPadding", {
+    PaddingTop = UDim.new(0, 5),
+    PaddingBottom = UDim.new(0, 5),
+    PaddingLeft = UDim.new(0, 6),
+    PaddingRight = UDim.new(0, 6),
+}, HistoryScroll)
+New("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.Name }, HistoryScroll)
+
+updateHistoryUI = function()
+    for _, child in ipairs(HistoryScroll:GetChildren()) do
+        if child.Name == "HistoryRow" or child.Name == "HistoryEmpty" then
+            child:Destroy()
+        end
+    end
+
+    HistoryTotalLabel.Text = "Total pets: " .. petsBought
+    HistoryPointsLabel.Text = "Total points: " .. totalPoints
+
+    local names = {}
+    for petName, count in pairs(petHistory) do
+        if tonumber(count) and tonumber(count) > 0 then
+            table.insert(names, petName)
+        end
+    end
+    table.sort(names)
+
+    if #names == 0 then
+        New("TextLabel", {
+            Name = "HistoryEmpty",
+            Text = "No pets secured yet.",
+            Font = Theme.FontBody,
+            TextSize = 13,
+            TextColor3 = Theme.Muted,
+            BackgroundTransparency = 1,
+            Size = UDim2.new(1, 0, 0, 32),
+            TextXAlignment = Enum.TextXAlignment.Center,
+        }, HistoryScroll)
+        return
+    end
+
+    for _, petName in ipairs(names) do
+        local row = New("Frame", {
+            Name = "HistoryRow",
+            BackgroundColor3 = Theme.Surface3,
+            BackgroundTransparency = 0.22,
+            BorderSizePixel = 0,
+            Size = UDim2.new(1, 0, 0, 30),
+        }, HistoryScroll)
+        New("UICorner", { CornerRadius = UDim.new(0, 5) }, row)
+        New("TextLabel", {
+            Text = petName,
+            Font = Theme.Font,
+            TextSize = 13,
+            TextColor3 = Theme.White,
+            BackgroundTransparency = 1,
+            Position = UDim2.new(0, 10, 0, 0),
+            Size = UDim2.new(0.7, -10, 1, 0),
+            TextXAlignment = Enum.TextXAlignment.Left,
+        }, row)
+        New("TextLabel", {
+            Text = "x" .. tostring(petHistory[petName]),
+            Font = Theme.Font,
+            TextSize = 13,
+            TextColor3 = Theme.Success,
+            BackgroundTransparency = 1,
+            Position = UDim2.new(0.7, 0, 0, 0),
+            Size = UDim2.new(0.3, -10, 1, 0),
+            TextXAlignment = Enum.TextXAlignment.Right,
+        }, row)
+    end
+end
 
 local shecklesValueObject = nil
 
@@ -1817,9 +2184,11 @@ local function setPetProtectEnabled(enabled)
                         local petName = getWildPetSpeciesName(pet)
                         petsBought = petsBought + 1
                         totalPoints = totalPoints + points
+                        petHistory[petName] = (tonumber(petHistory[petName]) or 0) + 1
                         print("[AutoBuyPet] Scored", petName, rarity, "+" .. points, "Total:", totalPoints)
                         saveSettings()
                         updateStatusUI()
+                        if updateHistoryUI then updateHistoryUI() end
                         Notify("Secured!", petName .. " bought! " .. rarity .. " +" .. points .. " points", 2)
                         break
                     end
@@ -1890,9 +2259,22 @@ local function setPetProtectEnabled(enabled)
                     humanoid:MoveTo(hrp.Position)
                     noPetTimer = noPetTimer + 1
                     if autoRejoin and noPetTimer >= NO_PET_TIMEOUT then
+                        local customJobId = getNextCustomJobId()
+                        if customJobId then
+                            Notify("Server Hop", "No pets left — hopping to the next saved Job ID.", 3)
+                            if isKRNL then
+                                enableKRNLQueue()
+                            end
+                            saveSettings()
+                            task.wait(1.2)
+                            pcall(function()
+                                TeleportService:TeleportToPlaceInstance(game.PlaceId, customJobId, LocalPlayer)
+                            end)
+                            break
+                        end
+
                         local server = findLowPopulationServer()
                         Notify("Server Hop", "No pets left — looking for a 1-6 player server...", 3)
-                        
                         if not server then
                             Notify("Server Hop", "No server with 1-6 players found. Staying here.", 3)
                             noPetTimer = 0
@@ -1946,7 +2328,7 @@ local minimized = false
 MinButton.Activated:Connect(function()
     minimized = not minimized
     Body.Visible = not minimized
-    local size = minimized and UDim2.new(0, 520, 0, 38) or UDim2.new(0, 520, 0, 460)
+    local size = minimized and UDim2.new(0, 520, 0, 38) or UDim2.new(0, 520, 0, 500)
     SafeTween(Main, TweenInfo.new(0.2), { Size = size })
     SafeTween(DropShadowHolder, TweenInfo.new(0.2), { Size = size })
     SafeTween(DropShadow, TweenInfo.new(0.2), { Size = size })
@@ -1973,6 +2355,8 @@ RadiusBox.Text = tostring(petPunchRadius)
 rebuildTargetList()
 updateRejoinUI()
 updateStatusUI()
+updateJobIdsUI()
+if updateHistoryUI then updateHistoryUI() end
 
 -- Currency can change without any action in this hub, so refresh just this
 -- status line in the background instead of waiting for another UI update.
