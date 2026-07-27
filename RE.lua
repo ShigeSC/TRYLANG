@@ -6,6 +6,7 @@ local TeleportService = game:GetService("TeleportService")
 local GuiService = game:GetService("GuiService")
 local CoreGui = game:GetService("CoreGui")
 local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local PlaceId = game.PlaceId
 local JobId = game.JobId
@@ -24,12 +25,17 @@ local queueteleport = queueteleport or (syn and syn.queue_on_teleport) or (fluxu
 
 --// Auto Execute on Teleport Setup
 if KeepScript and queueteleport then
-    LocalPlayer.OnTeleport:Connect(function(State)
-        if not TeleportCheck then
-            TeleportCheck = true
-            queueteleport("loadstring(game:HttpGet('"https://raw.githubusercontent.com/ShigeSC/TRYLANG/refs/heads/main/RE.lua"'))()")
-        end
-    end)
+	LocalPlayer.OnTeleport:Connect(function(State)
+		if not TeleportCheck then
+			TeleportCheck = true
+			-- FIX: the string was previously built with mismatched quotes
+			-- ("'" ... "https://..." ... "'"), which is a hard Lua syntax
+			-- error and would prevent the whole script from compiling.
+			-- Concatenating SCRIPT_URL in properly fixes it and also means
+			-- this line always matches whatever URL is set above.
+			queueteleport("loadstring(game:HttpGet('" .. SCRIPT_URL .. "'))()")
+		end
+	end)
 end
 
 --// GUI Creation
@@ -55,8 +61,8 @@ UICorner.Parent = MainFrame
 --// Gradient Background
 local UIGradient = Instance.new("UIGradient")
 UIGradient.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 30, 30)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 20, 20))
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 30, 30)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 20, 20))
 })
 UIGradient.Rotation = 45
 UIGradient.Parent = MainFrame
@@ -167,40 +173,40 @@ local dragging = false
 local dragInput, dragStart, startPos
 
 TitleBar.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = true
-        dragStart = input.Position
-        startPos = MainFrame.Position
-    end
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging = true
+		dragStart = input.Position
+		startPos = MainFrame.Position
+	end
 end)
 
 TitleBar.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement then
-        dragInput = input
-    end
+	if input.UserInputType == Enum.UserInputType.MouseMovement then
+		dragInput = input
+	end
 end)
 
-game:GetService("UserInputService").InputChanged:Connect(function(input)
-    if input == dragInput and dragging then
-        local delta = input.Position - dragStart
-        MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-    end
+UserInputService.InputChanged:Connect(function(input)
+	if input == dragInput and dragging then
+		local delta = input.Position - dragStart
+		MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+	end
 end)
 
-game:GetService("UserInputService").InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 then
-        dragging = false
-    end
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging = false
+	end
 end)
 
 --// Button Hover Effects
 local function ButtonHover(button, defaultColor, hoverColor)
-    button.MouseEnter:Connect(function()
-        TweenService:Create(button, TweenInfo.new(0.2), {BackgroundColor3 = hoverColor}):Play()
-    end)
-    button.MouseLeave:Connect(function()
-        TweenService:Create(button, TweenInfo.new(0.2), {BackgroundColor3 = defaultColor}):Play()
-    end)
+	button.MouseEnter:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.2), {BackgroundColor3 = hoverColor}):Play()
+	end)
+	button.MouseLeave:Connect(function()
+		TweenService:Create(button, TweenInfo.new(0.2), {BackgroundColor3 = defaultColor}):Play()
+	end)
 end
 
 ButtonHover(RejoinButton, Color3.fromRGB(0, 120, 255), Color3.fromRGB(0, 150, 255))
@@ -208,67 +214,67 @@ ButtonHover(CloseButton, Color3.fromRGB(255, 70, 70), Color3.fromRGB(255, 100, 1
 
 --// Rejoin Function
 local function Rejoin()
-    StatusLabel.Text = "Rejoining..."
-    StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
-    
-    task.spawn(function()
-        if #Players:GetPlayers() <= 1 then
-            LocalPlayer:Kick("\nRejoining...")
-            task.wait(0.5)
-            TeleportService:Teleport(PlaceId, LocalPlayer)
-        else
-            TeleportService:TeleportToPlaceInstance(PlaceId, JobId, LocalPlayer)
-        end
-    end)
+	StatusLabel.Text = "Rejoining..."
+	StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
+
+	task.spawn(function()
+		if #Players:GetPlayers() <= 1 then
+			LocalPlayer:Kick("\nRejoining...")
+			task.wait(0.5)
+			TeleportService:Teleport(PlaceId, LocalPlayer)
+		else
+			TeleportService:TeleportToPlaceInstance(PlaceId, JobId, LocalPlayer)
+		end
+	end)
 end
 
 --// Auto Rejoin Toggle
 local AutoRejoinConnection
 
 local function ToggleAutoRejoin()
-    AutoRejoinEnabled = not AutoRejoinEnabled
-    
-    if AutoRejoinEnabled then
-        AutoRejoinButton.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
-        AutoRejoinButton.Text = "✅ AUTO REJOIN: ON"
-        StatusLabel.Text = "Auto rejoin enabled"
-        StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 100)
-        
-        -- Connect to error message changed
-        AutoRejoinConnection = GuiService.ErrorMessageChanged:Connect(function()
-            task.wait(0.5)
-            Rejoin()
-        end)
-    else
-        AutoRejoinButton.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
-        AutoRejoinButton.Text = "⛔ AUTO REJOIN: OFF"
-        StatusLabel.Text = "Auto rejoin disabled"
-        StatusLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
-        
-        if AutoRejoinConnection then
-            AutoRejoinConnection:Disconnect()
-            AutoRejoinConnection = nil
-        end
-    end
+	AutoRejoinEnabled = not AutoRejoinEnabled
+
+	if AutoRejoinEnabled then
+		AutoRejoinButton.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
+		AutoRejoinButton.Text = "✅ AUTO REJOIN: ON"
+		StatusLabel.Text = "Auto rejoin enabled"
+		StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 100)
+
+		-- Connect to error message changed
+		AutoRejoinConnection = GuiService.ErrorMessageChanged:Connect(function()
+			task.wait(0.5)
+			Rejoin()
+		end)
+	else
+		AutoRejoinButton.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+		AutoRejoinButton.Text = "⛔ AUTO REJOIN: OFF"
+		StatusLabel.Text = "Auto rejoin disabled"
+		StatusLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+
+		if AutoRejoinConnection then
+			AutoRejoinConnection:Disconnect()
+			AutoRejoinConnection = nil
+		end
+	end
 end
 
 --// Button Connections
 RejoinButton.MouseButton1Click:Connect(function()
-    -- Button click animation
-    TweenService:Create(RejoinButton, TweenInfo.new(0.1), {Size = UDim2.new(0, 240, 0, 40)}):Play()
-    task.wait(0.1)
-    TweenService:Create(RejoinButton, TweenInfo.new(0.1), {Size = UDim2.new(0, 250, 0, 45)}):Play()
-    
-    Rejoin()
+	-- Button click animation
+	TweenService:Create(RejoinButton, TweenInfo.new(0.1), {Size = UDim2.new(0, 240, 0, 40)}):Play()
+	task.wait(0.1)
+	TweenService:Create(RejoinButton, TweenInfo.new(0.1), {Size = UDim2.new(0, 250, 0, 45)}):Play()
+
+	Rejoin()
 end)
 
 AutoRejoinButton.MouseButton1Click:Connect(ToggleAutoRejoin)
 
 CloseButton.MouseButton1Click:Connect(function()
-    -- Close animation
-    TweenService:Create(MainFrame, TweenInfo.new(0.3), {Size = UDim2.new(0, 300, 0, 0)}):Play()
-    task.wait(0.3)
-    ScreenGui:Destroy()
+	-- Close animation
+	TweenService:Create(MainFrame, TweenInfo.new(0.3), {Size = UDim2.new(0, 300, 0, 0)}):Play()
+	task.wait(0.3)
+	ScreenGui:Destroy()
 end)
 
 --// Intro Animation
@@ -276,63 +282,63 @@ MainFrame.Size = UDim2.new(0, 300, 0, 0)
 TweenService:Create(MainFrame, TweenInfo.new(0.5, Enum.EasingStyle.Back), {Size = UDim2.new(0, 300, 0, 200)}):Play()
 
 --// Keybind to Toggle GUI (RightShift)
-game:GetService("UserInputService").InputBegan:Connect(function(input, gameProcessed)
-    if not gameProcessed and input.KeyCode == Enum.KeyCode.RightShift then
-        ScreenGui.Enabled = not ScreenGui.Enabled
-    end
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if not gameProcessed and input.KeyCode == Enum.KeyCode.RightShift then
+		ScreenGui.Enabled = not ScreenGui.Enabled
+	end
 end)
 
 --// Notification Function
 local function Notify(title, message, duration)
-    duration = duration or 3
-    
-    local NotifGui = Instance.new("ScreenGui")
-    NotifGui.Name = "Notification"
-    NotifGui.Parent = CoreGui
-    
-    local NotifFrame = Instance.new("Frame")
-    NotifFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
-    NotifFrame.BorderSizePixel = 0
-    NotifFrame.Position = UDim2.new(1, 20, 0, 20)
-    NotifFrame.Size = UDim2.new(0, 250, 0, 60)
-    
-    local NotifCorner = Instance.new("UICorner")
-    NotifCorner.CornerRadius = UDim.new(0, 8)
-    NotifCorner.Parent = NotifFrame
-    
-    local NotifTitle = Instance.new("TextLabel")
-    NotifTitle.BackgroundTransparency = 1
-    NotifTitle.Position = UDim2.new(0, 10, 0, 5)
-    NotifTitle.Size = UDim2.new(1, -20, 0, 20)
-    NotifTitle.Font = Enum.Font.GothamBold
-    NotifTitle.Text = title
-    NotifTitle.TextColor3 = Color3.fromRGB(0, 150, 255)
-    NotifTitle.TextSize = 14
-    NotifTitle.TextXAlignment = Enum.TextXAlignment.Left
-    NotifTitle.Parent = NotifFrame
-    
-    local NotifText = Instance.new("TextLabel")
-    NotifText.BackgroundTransparency = 1
-    NotifText.Position = UDim2.new(0, 10, 0, 28)
-    NotifText.Size = UDim2.new(1, -20, 0, 25)
-    NotifText.Font = Enum.Font.Gotham
-    NotifText.Text = message
-    NotifText.TextColor3 = Color3.fromRGB(255, 255, 255)
-    NotifText.TextSize = 12
-    NotifText.TextXAlignment = Enum.TextXAlignment.Left
-    NotifText.Parent = NotifFrame
-    
-    NotifFrame.Parent = NotifGui
-    
-    -- Slide in
-    TweenService:Create(NotifFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quart), {Position = UDim2.new(1, -270, 0, 20)}):Play()
-    
-    task.wait(duration)
-    
-    -- Slide out
-    TweenService:Create(NotifFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quart), {Position = UDim2.new(1, 20, 0, 20)}):Play()
-    task.wait(0.5)
-    NotifGui:Destroy()
+	duration = duration or 3
+
+	local NotifGui = Instance.new("ScreenGui")
+	NotifGui.Name = "Notification"
+	NotifGui.Parent = CoreGui
+
+	local NotifFrame = Instance.new("Frame")
+	NotifFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+	NotifFrame.BorderSizePixel = 0
+	NotifFrame.Position = UDim2.new(1, 20, 0, 20)
+	NotifFrame.Size = UDim2.new(0, 250, 0, 60)
+
+	local NotifCorner = Instance.new("UICorner")
+	NotifCorner.CornerRadius = UDim.new(0, 8)
+	NotifCorner.Parent = NotifFrame
+
+	local NotifTitle = Instance.new("TextLabel")
+	NotifTitle.BackgroundTransparency = 1
+	NotifTitle.Position = UDim2.new(0, 10, 0, 5)
+	NotifTitle.Size = UDim2.new(1, -20, 0, 20)
+	NotifTitle.Font = Enum.Font.GothamBold
+	NotifTitle.Text = title
+	NotifTitle.TextColor3 = Color3.fromRGB(0, 150, 255)
+	NotifTitle.TextSize = 14
+	NotifTitle.TextXAlignment = Enum.TextXAlignment.Left
+	NotifTitle.Parent = NotifFrame
+
+	local NotifText = Instance.new("TextLabel")
+	NotifText.BackgroundTransparency = 1
+	NotifText.Position = UDim2.new(0, 10, 0, 28)
+	NotifText.Size = UDim2.new(1, -20, 0, 25)
+	NotifText.Font = Enum.Font.Gotham
+	NotifText.Text = message
+	NotifText.TextColor3 = Color3.fromRGB(255, 255, 255)
+	NotifText.TextSize = 12
+	NotifText.TextXAlignment = Enum.TextXAlignment.Left
+	NotifText.Parent = NotifFrame
+
+	NotifFrame.Parent = NotifGui
+
+	-- Slide in
+	TweenService:Create(NotifFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quart), {Position = UDim2.new(1, -270, 0, 20)}):Play()
+
+	task.wait(duration)
+
+	-- Slide out
+	TweenService:Create(NotifFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quart), {Position = UDim2.new(1, 20, 0, 20)}):Play()
+	task.wait(0.5)
+	NotifGui:Destroy()
 end
 
 --// Initial Notification
