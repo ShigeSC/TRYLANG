@@ -1373,7 +1373,7 @@ local function setPetProtectEnabled(enabled)
             return
         end
 
-        Notify("Pet Protect", "Started — protecting: " .. formatList(targetPetNames), 3)
+        Notify("Buy Protect", "Started — Buying and Protecting: " .. formatList(targetPetNames), 3)
 
         petProtectThread = task.spawn(function()
             local character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
@@ -1538,7 +1538,7 @@ local function setPetProtectEnabled(enabled)
             end
 
             local function securePet(pet)
-                Notify("Target Locked", "Now protecting: " .. getWildPetSpeciesName(pet), 2)
+                Notify("Target Locked", "Now Buying And Protecting: " .. getWildPetSpeciesName(pet), 2)
                 noPetTimer = 0
 
                 while petProtectEnabled do
