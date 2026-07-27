@@ -1,165 +1,342 @@
--- =====================================================
---  AUTO-REJOIN SCRIPT
---  Re-executes itself automatically after any rejoin/teleport,
---  plus a small GUI with a manual Rejoin button.
--- =====================================================
+--// Auto Rejoin GUI with Teleport Execution
+--// Works standalone - no Infinite Yield needed
 
 local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
-local UserInputService = game:GetService("UserInputService")
+local GuiService = game:GetService("GuiService")
+local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
 local LocalPlayer = Players.LocalPlayer
+local PlaceId = game.PlaceId
+local JobId = game.JobId
 
--- >>> IMPORTANT: put the raw URL to THIS script here (e.g. your GitHub raw
--- link) so it knows what to re-run after teleporting into the next server. <<<
-local SCRIPT_URL = "https://raw.githubusercontent.com/ShigeSC/TRYLANG/refs/heads/main/RE.lua"
+--// Configuration
+local SCRIPT_URL = "https://raw.githubusercontent.com/ShigeSC/TRYLANG/refs/heads/main/RE.lua" -- Change to your script URL
+local GUI_TITLE = "Auto Rejoin"
+local KeepScript = true -- Set to false if you don't want auto-execute on teleport
 
--- =========================================================
--- Executor-agnostic queue_on_teleport
--- =========================================================
-local queueteleport = (queue_on_teleport)
-    or (syn and syn.queue_on_teleport)
-    or (fluxus and fluxus.queue_on_teleport)
+--// Variables
+local TeleportCheck = false
+local AutoRejoinEnabled = false
 
--- =========================================================
--- Auto re-execute after any teleport (rejoin, server hop, etc)
--- =========================================================
-local TeleportCheck = false -- one-shot guard so it doesn't queue more than once
+--// Executor Compatibility Check
+local queueteleport = queueteleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or (typeof(queue_on_teleport) == "function" and queue_on_teleport)
 
-LocalPlayer.OnTeleport:Connect(function(_State)
-    if (not TeleportCheck) and queueteleport then
-        TeleportCheck = true
-        queueteleport("loadstring(game:HttpGet('" .. SCRIPT_URL .. "'))()")
-    end
-end)
-
--- =========================================================
--- GUI
--- =========================================================
-local function GetGuiParent()
-    local ok, hui = pcall(function() return gethui and gethui() end)
-    if ok and hui then
-        return hui
-    end
-    return LocalPlayer:WaitForChild("PlayerGui")
-end
-
-local GuiParent = GetGuiParent()
-
-local existing = GuiParent:FindFirstChild("AutoRejoinGui")
-if existing then existing:Destroy() end
-
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "AutoRejoinGui"
-ScreenGui.ResetOnSpawn = false
-ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-ScreenGui.Parent = GuiParent
-
-local Frame = Instance.new("Frame")
-Frame.Name = "MainFrame"
-Frame.AnchorPoint = Vector2.new(0.5, 0.5)
-Frame.Position = UDim2.new(0.5, 0, 0.5, 0)
-Frame.Size = UDim2.new(0, 220, 0, 112)
-Frame.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
-Frame.BorderSizePixel = 0
-Frame.Active = true
-Frame.Parent = ScreenGui
-
-local UICorner = Instance.new("UICorner")
-UICorner.CornerRadius = UDim.new(0, 8)
-UICorner.Parent = Frame
-
-local UIStroke = Instance.new("UIStroke")
-UIStroke.Color = Color3.fromRGB(190, 22, 22)
-UIStroke.Thickness = 1.5
-UIStroke.Parent = Frame
-
-local Title = Instance.new("TextLabel")
-Title.Name = "Title"
-Title.Text = "AUTO-REJOIN"
-Title.Font = Enum.Font.GothamBold
-Title.TextSize = 15
-Title.TextColor3 = Color3.fromRGB(235, 235, 235)
-Title.BackgroundTransparency = 1
-Title.Position = UDim2.new(0, 12, 0, 8)
-Title.Size = UDim2.new(1, -24, 0, 20)
-Title.TextXAlignment = Enum.TextXAlignment.Left
-Title.Active = true
-Title.Parent = Frame
-
-local StatusLabel = Instance.new("TextLabel")
-StatusLabel.Name = "StatusLabel"
-StatusLabel.Text = queueteleport
-    and "Ready -- will auto-run after rejoin"
-    or "Executor doesn't support auto re-run"
-StatusLabel.Font = Enum.Font.Gotham
-StatusLabel.TextSize = 12
-StatusLabel.TextWrapped = true
-StatusLabel.TextColor3 = queueteleport and Color3.fromRGB(130, 220, 150) or Color3.fromRGB(215, 60, 60)
-StatusLabel.BackgroundTransparency = 1
-StatusLabel.Position = UDim2.new(0, 12, 0, 30)
-StatusLabel.Size = UDim2.new(1, -24, 0, 36)
-StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
-StatusLabel.Parent = Frame
-
-local RejoinButton = Instance.new("TextButton")
-RejoinButton.Name = "RejoinButton"
-RejoinButton.Text = "REJOIN"
-RejoinButton.Font = Enum.Font.GothamBold
-RejoinButton.TextSize = 14
-RejoinButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-RejoinButton.BackgroundColor3 = Color3.fromRGB(190, 22, 22)
-RejoinButton.BorderSizePixel = 0
-RejoinButton.Position = UDim2.new(0, 12, 1, -36)
-RejoinButton.Size = UDim2.new(1, -24, 0, 28)
-RejoinButton.Parent = Frame
-
-local RejoinCorner = Instance.new("UICorner")
-RejoinCorner.CornerRadius = UDim.new(0, 5)
-RejoinCorner.Parent = RejoinButton
-
--- Draggable window (drag by the title bar)
-local dragging, dragStart, startPos = false, nil, nil
-
-Title.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
-        dragStart = input.Position
-        startPos = Frame.Position
-
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                dragging = false
-            end
-        end)
-    end
-end)
-
-UserInputService.InputChanged:Connect(function(input)
-    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
-        or input.UserInputType == Enum.UserInputType.Touch) then
-        local delta = input.Position - dragStart
-        Frame.Position = UDim2.new(
-            startPos.X.Scale, startPos.X.Offset + delta.X,
-            startPos.Y.Scale, startPos.Y.Offset + delta.Y
-        )
-    end
-end)
-
--- Manual rejoin: teleports back into the same place (new server instance)
-RejoinButton.Activated:Connect(function()
-    StatusLabel.Text = "Rejoining..."
-    StatusLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
-
-    task.spawn(function()
-        local success, err = pcall(function()
-            TeleportService:Teleport(game.PlaceId, LocalPlayer)
-        end)
-        if not success then
-            StatusLabel.Text = "Rejoin failed: " .. tostring(err)
-            StatusLabel.TextColor3 = Color3.fromRGB(215, 60, 60)
+--// Auto Execute on Teleport Setup
+if KeepScript and queueteleport then
+    LocalPlayer.OnTeleport:Connect(function(State)
+        if not TeleportCheck then
+            TeleportCheck = true
+            queueteleport("loadstring(game:HttpGet('"https://raw.githubusercontent.com/ShigeSC/TRYLANG/refs/heads/main/RE.lua"'))()")
         end
     end)
+end
+
+--// GUI Creation
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "AutoRejoinGUI"
+ScreenGui.Parent = CoreGui
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Parent = ScreenGui
+MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+MainFrame.BorderSizePixel = 0
+MainFrame.Position = UDim2.new(0.5, -150, 0.5, -100)
+MainFrame.Size = UDim2.new(0, 300, 0, 200)
+MainFrame.ClipsDescendants = true
+
+--// Corner Radius
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 8)
+UICorner.Parent = MainFrame
+
+--// Gradient Background
+local UIGradient = Instance.new("UIGradient")
+UIGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 30, 30)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 20, 20))
+})
+UIGradient.Rotation = 45
+UIGradient.Parent = MainFrame
+
+--// Title Bar
+local TitleBar = Instance.new("Frame")
+TitleBar.Name = "TitleBar"
+TitleBar.Parent = MainFrame
+TitleBar.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+TitleBar.BorderSizePixel = 0
+TitleBar.Size = UDim2.new(1, 0, 0, 35)
+
+local TitleCorner = Instance.new("UICorner")
+TitleCorner.CornerRadius = UDim.new(0, 8)
+TitleCorner.Parent = TitleBar
+
+local TitleFix = Instance.new("Frame")
+TitleFix.Parent = TitleBar
+TitleFix.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+TitleFix.BorderSizePixel = 0
+TitleFix.Position = UDim2.new(0, 0, 0.5, 0)
+TitleFix.Size = UDim2.new(1, 0, 0.5, 0)
+
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Name = "Title"
+TitleLabel.Parent = TitleBar
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Size = UDim2.new(1, 0, 1, 0)
+TitleLabel.Font = Enum.Font.GothamBold
+TitleLabel.Text = GUI_TITLE
+TitleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+TitleLabel.TextSize = 16
+
+--// Close Button
+local CloseButton = Instance.new("TextButton")
+CloseButton.Name = "Close"
+CloseButton.Parent = TitleBar
+CloseButton.BackgroundColor3 = Color3.fromRGB(255, 70, 70)
+CloseButton.BorderSizePixel = 0
+CloseButton.Position = UDim2.new(1, -30, 0, 5)
+CloseButton.Size = UDim2.new(0, 25, 0, 25)
+CloseButton.Font = Enum.Font.GothamBold
+CloseButton.Text = "X"
+CloseButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseButton.TextSize = 14
+
+local CloseCorner = Instance.new("UICorner")
+CloseCorner.CornerRadius = UDim.new(0, 6)
+CloseCorner.Parent = CloseButton
+
+--// Content Frame
+local ContentFrame = Instance.new("Frame")
+ContentFrame.Name = "Content"
+ContentFrame.Parent = MainFrame
+ContentFrame.BackgroundTransparency = 1
+ContentFrame.Position = UDim2.new(0, 0, 0, 40)
+ContentFrame.Size = UDim2.new(1, 0, 1, -40)
+
+--// Rejoin Button
+local RejoinButton = Instance.new("TextButton")
+RejoinButton.Name = "RejoinButton"
+RejoinButton.Parent = ContentFrame
+RejoinButton.BackgroundColor3 = Color3.fromRGB(0, 120, 255)
+RejoinButton.BorderSizePixel = 0
+RejoinButton.Position = UDim2.new(0.5, -125, 0, 20)
+RejoinButton.Size = UDim2.new(0, 250, 0, 45)
+RejoinButton.Font = Enum.Font.GothamBold
+RejoinButton.Text = "🔄 REJOIN SERVER"
+RejoinButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+RejoinButton.TextSize = 16
+RejoinButton.AutoButtonColor = true
+
+local RejoinCorner = Instance.new("UICorner")
+RejoinCorner.CornerRadius = UDim.new(0, 8)
+RejoinCorner.Parent = RejoinButton
+
+--// Auto Rejoin Button
+local AutoRejoinButton = Instance.new("TextButton")
+AutoRejoinButton.Name = "AutoRejoinButton"
+AutoRejoinButton.Parent = ContentFrame
+AutoRejoinButton.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+AutoRejoinButton.BorderSizePixel = 0
+AutoRejoinButton.Position = UDim2.new(0.5, -125, 0, 80)
+AutoRejoinButton.Size = UDim2.new(0, 250, 0, 45)
+AutoRejoinButton.Font = Enum.Font.GothamBold
+AutoRejoinButton.Text = "⛔ AUTO REJOIN: OFF"
+AutoRejoinButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+AutoRejoinButton.TextSize = 16
+
+local AutoCorner = Instance.new("UICorner")
+AutoCorner.CornerRadius = UDim.new(0, 8)
+AutoCorner.Parent = AutoRejoinButton
+
+--// Status Label
+local StatusLabel = Instance.new("TextLabel")
+StatusLabel.Name = "Status"
+StatusLabel.Parent = ContentFrame
+StatusLabel.BackgroundTransparency = 1
+StatusLabel.Position = UDim2.new(0, 0, 0, 135)
+StatusLabel.Size = UDim2.new(1, 0, 0, 20)
+StatusLabel.Font = Enum.Font.Gotham
+StatusLabel.Text = "Ready"
+StatusLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+StatusLabel.TextSize = 12
+
+--// Dragging Functionality
+local dragging = false
+local dragInput, dragStart, startPos
+
+TitleBar.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = MainFrame.Position
+    end
 end)
 
-print("[AutoRejoin] Loaded. queue_on_teleport support: " .. tostring(queueteleport ~= nil))
+TitleBar.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then
+        dragInput = input
+    end
+end)
+
+game:GetService("UserInputService").InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        local delta = input.Position - dragStart
+        MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+game:GetService("UserInputService").InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = false
+    end
+end)
+
+--// Button Hover Effects
+local function ButtonHover(button, defaultColor, hoverColor)
+    button.MouseEnter:Connect(function()
+        TweenService:Create(button, TweenInfo.new(0.2), {BackgroundColor3 = hoverColor}):Play()
+    end)
+    button.MouseLeave:Connect(function()
+        TweenService:Create(button, TweenInfo.new(0.2), {BackgroundColor3 = defaultColor}):Play()
+    end)
+end
+
+ButtonHover(RejoinButton, Color3.fromRGB(0, 120, 255), Color3.fromRGB(0, 150, 255))
+ButtonHover(CloseButton, Color3.fromRGB(255, 70, 70), Color3.fromRGB(255, 100, 100))
+
+--// Rejoin Function
+local function Rejoin()
+    StatusLabel.Text = "Rejoining..."
+    StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
+    
+    task.spawn(function()
+        if #Players:GetPlayers() <= 1 then
+            LocalPlayer:Kick("\nRejoining...")
+            task.wait(0.5)
+            TeleportService:Teleport(PlaceId, LocalPlayer)
+        else
+            TeleportService:TeleportToPlaceInstance(PlaceId, JobId, LocalPlayer)
+        end
+    end)
+end
+
+--// Auto Rejoin Toggle
+local AutoRejoinConnection
+
+local function ToggleAutoRejoin()
+    AutoRejoinEnabled = not AutoRejoinEnabled
+    
+    if AutoRejoinEnabled then
+        AutoRejoinButton.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
+        AutoRejoinButton.Text = "✅ AUTO REJOIN: ON"
+        StatusLabel.Text = "Auto rejoin enabled"
+        StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 100)
+        
+        -- Connect to error message changed
+        AutoRejoinConnection = GuiService.ErrorMessageChanged:Connect(function()
+            task.wait(0.5)
+            Rejoin()
+        end)
+    else
+        AutoRejoinButton.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+        AutoRejoinButton.Text = "⛔ AUTO REJOIN: OFF"
+        StatusLabel.Text = "Auto rejoin disabled"
+        StatusLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+        
+        if AutoRejoinConnection then
+            AutoRejoinConnection:Disconnect()
+            AutoRejoinConnection = nil
+        end
+    end
+end
+
+--// Button Connections
+RejoinButton.MouseButton1Click:Connect(function()
+    -- Button click animation
+    TweenService:Create(RejoinButton, TweenInfo.new(0.1), {Size = UDim2.new(0, 240, 0, 40)}):Play()
+    task.wait(0.1)
+    TweenService:Create(RejoinButton, TweenInfo.new(0.1), {Size = UDim2.new(0, 250, 0, 45)}):Play()
+    
+    Rejoin()
+end)
+
+AutoRejoinButton.MouseButton1Click:Connect(ToggleAutoRejoin)
+
+CloseButton.MouseButton1Click:Connect(function()
+    -- Close animation
+    TweenService:Create(MainFrame, TweenInfo.new(0.3), {Size = UDim2.new(0, 300, 0, 0)}):Play()
+    task.wait(0.3)
+    ScreenGui:Destroy()
+end)
+
+--// Intro Animation
+MainFrame.Size = UDim2.new(0, 300, 0, 0)
+TweenService:Create(MainFrame, TweenInfo.new(0.5, Enum.EasingStyle.Back), {Size = UDim2.new(0, 300, 0, 200)}):Play()
+
+--// Keybind to Toggle GUI (RightShift)
+game:GetService("UserInputService").InputBegan:Connect(function(input, gameProcessed)
+    if not gameProcessed and input.KeyCode == Enum.KeyCode.RightShift then
+        ScreenGui.Enabled = not ScreenGui.Enabled
+    end
+end)
+
+--// Notification Function
+local function Notify(title, message, duration)
+    duration = duration or 3
+    
+    local NotifGui = Instance.new("ScreenGui")
+    NotifGui.Name = "Notification"
+    NotifGui.Parent = CoreGui
+    
+    local NotifFrame = Instance.new("Frame")
+    NotifFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    NotifFrame.BorderSizePixel = 0
+    NotifFrame.Position = UDim2.new(1, 20, 0, 20)
+    NotifFrame.Size = UDim2.new(0, 250, 0, 60)
+    
+    local NotifCorner = Instance.new("UICorner")
+    NotifCorner.CornerRadius = UDim.new(0, 8)
+    NotifCorner.Parent = NotifFrame
+    
+    local NotifTitle = Instance.new("TextLabel")
+    NotifTitle.BackgroundTransparency = 1
+    NotifTitle.Position = UDim2.new(0, 10, 0, 5)
+    NotifTitle.Size = UDim2.new(1, -20, 0, 20)
+    NotifTitle.Font = Enum.Font.GothamBold
+    NotifTitle.Text = title
+    NotifTitle.TextColor3 = Color3.fromRGB(0, 150, 255)
+    NotifTitle.TextSize = 14
+    NotifTitle.TextXAlignment = Enum.TextXAlignment.Left
+    NotifTitle.Parent = NotifFrame
+    
+    local NotifText = Instance.new("TextLabel")
+    NotifText.BackgroundTransparency = 1
+    NotifText.Position = UDim2.new(0, 10, 0, 28)
+    NotifText.Size = UDim2.new(1, -20, 0, 25)
+    NotifText.Font = Enum.Font.Gotham
+    NotifText.Text = message
+    NotifText.TextColor3 = Color3.fromRGB(255, 255, 255)
+    NotifText.TextSize = 12
+    NotifText.TextXAlignment = Enum.TextXAlignment.Left
+    NotifText.Parent = NotifFrame
+    
+    NotifFrame.Parent = NotifGui
+    
+    -- Slide in
+    TweenService:Create(NotifFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quart), {Position = UDim2.new(1, -270, 0, 20)}):Play()
+    
+    task.wait(duration)
+    
+    -- Slide out
+    TweenService:Create(NotifFrame, TweenInfo.new(0.5, Enum.EasingStyle.Quart), {Position = UDim2.new(1, 20, 0, 20)}):Play()
+    task.wait(0.5)
+    NotifGui:Destroy()
+end
+
+--// Initial Notification
+Notify("Auto Rejoin", "Script loaded! Press RightShift to toggle GUI.", 3)
+
+print("[Auto Rejoin] Script loaded successfully!")
+print("[Auto Rejoin] Press RightShift to toggle GUI")
