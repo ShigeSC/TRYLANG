@@ -1994,6 +1994,81 @@ New("UIPadding", {
 }, HistoryScroll)
 New("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.Name }, HistoryScroll)
 
+-- Fandom images are downloaded once and cached locally because ImageLabel
+-- cannot display normal web URLs directly.
+local WIKI_PET_PAGE_NAMES = {
+    GoldenDragonfly = "Golden Dragonfly",
+    BlackDragon = "Black Dragon",
+    IceSerpent = "Ice Serpent",
+    ShadowDragon = "Shadow Dragon",
+}
+local petIconCache = {}
+local petIconLoading = {}
+local petIconFolder = CONFIG_FOLDER .. "/pet_icons"
+local customAsset = getcustomasset or getsynasset
+
+local function getInGamePetIcon(petName)
+    for _, container in ipairs({ LocalPlayer:FindFirstChild("Backpack"), LocalPlayer.Character }) do
+        if container then
+            local petTool = container:FindFirstChild(petName)
+            if petTool and petTool:IsA("Tool") and petTool.TextureId ~= "" then
+                return petTool.TextureId
+            end
+        end
+    end
+    return nil
+end
+
+local function setPetIcon(petName, imageLabel)
+    local inGameIcon = getInGamePetIcon(petName)
+    if inGameIcon then
+        imageLabel.Image = inGameIcon
+        return
+    end
+    if petIconCache[petName] then
+        imageLabel.Image = petIconCache[petName]
+        return
+    end
+    if petIconLoading[petName] or type(customAsset) ~= "function" then return end
+    petIconLoading[petName] = true
+
+    task.spawn(function()
+        local safeName = tostring(petName):gsub("[^%w]", "_")
+        local iconFile = petIconFolder .. "/" .. safeName .. ".png"
+        local iconAsset = nil
+
+        pcall(function()
+            if isfolder and makefolder and not isfolder(petIconFolder) then
+                makefolder(petIconFolder)
+            end
+            if isfile and isfile(iconFile) then
+                iconAsset = customAsset(iconFile)
+                return
+            end
+
+            local pageName = WIKI_PET_PAGE_NAMES[petName] or petName
+            local apiUrl = "https://growagarden2.fandom.com/api.php?action=query&format=json&prop=pageimages&piprop=thumbnail&pithumbsize=128&titles="
+                .. HttpService:UrlEncode(pageName)
+            local pageData = HttpService:JSONDecode(game:HttpGet(apiUrl))
+            local pages = pageData and pageData.query and pageData.query.pages
+            local page = pages and next(pages) and pages[next(pages)]
+            local imageUrl = page and page.thumbnail and page.thumbnail.source
+            if imageUrl then
+                writefile(iconFile, game:HttpGet(imageUrl))
+                iconAsset = customAsset(iconFile)
+            end
+        end)
+
+        petIconLoading[petName] = nil
+        if iconAsset then
+            petIconCache[petName] = iconAsset
+            if imageLabel and imageLabel.Parent then
+                imageLabel.Image = iconAsset
+            end
+        end
+    end)
+end
+
 updateHistoryUI = function()
     for _, child in ipairs(HistoryScroll:GetChildren()) do
         if child.Name == "HistoryRow" or child.Name == "HistoryEmpty" then
@@ -2035,14 +2110,25 @@ updateHistoryUI = function()
             Size = UDim2.new(1, 0, 0, 30),
         }, HistoryScroll)
         New("UICorner", { CornerRadius = UDim.new(0, 5) }, row)
+        local petIcon = New("ImageLabel", {
+            Name = "PetIcon",
+            BackgroundColor3 = Theme.Surface2,
+            BorderSizePixel = 0,
+            ScaleType = Enum.ScaleType.Fit,
+            Position = UDim2.new(0, 4, 0, 4),
+            Size = UDim2.new(0, 22, 0, 22),
+            Image = "",
+        }, row)
+        New("UICorner", { CornerRadius = UDim.new(0, 4) }, petIcon)
+        setPetIcon(petName, petIcon)
         New("TextLabel", {
             Text = petName,
             Font = Theme.Font,
             TextSize = 13,
             TextColor3 = Theme.White,
             BackgroundTransparency = 1,
-            Position = UDim2.new(0, 10, 0, 0),
-            Size = UDim2.new(0.55, -10, 1, 0),
+            Position = UDim2.new(0, 32, 0, 0),
+            Size = UDim2.new(0.55, -32, 1, 0),
             TextXAlignment = Enum.TextXAlignment.Left,
         }, row)
         New("TextLabel", {
@@ -2108,7 +2194,10 @@ local WebhookUrlBox = New("TextBox", {
     PlaceholderColor3 = Theme.Muted,
     BackgroundColor3 = Theme.InputBg,
     BorderSizePixel = 0,
+    ClipsDescendants = true,
     ClearTextOnFocus = false,
+    TextTruncate = Enum.TextTruncate.AtEnd,
+    TextXAlignment = Enum.TextXAlignment.Left,
     Position = UDim2.new(0, 12, 0, 88),
     Size = UDim2.new(1, -24, 0, 28),
 }, WebhookPanel)
@@ -2201,6 +2290,17 @@ WebhookUrlBox.FocusLost:Connect(function()
     webhookUrl = tostring(WebhookUrlBox.Text or ""):gsub("^%s+", ""):gsub("%s+$", "")
     saveSettings()
     updateWebhookUI()
+end)
+
+local webhookSaveSerial = 0
+WebhookUrlBox:GetPropertyChangedSignal("Text"):Connect(function()
+    webhookSaveSerial = webhookSaveSerial + 1
+    local currentSerial = webhookSaveSerial
+    task.delay(0.7, function()
+        if currentSerial ~= webhookSaveSerial then return end
+        webhookUrl = tostring(WebhookUrlBox.Text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        saveSettings()
+    end)
 end)
 
 WebhookToggle.Activated:Connect(function()
