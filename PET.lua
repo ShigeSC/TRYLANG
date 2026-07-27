@@ -1508,15 +1508,15 @@ rebuildTargetList()
 updateRejoinUI()
 updateStatusUI()
 
--- If it was enabled before the rejoin, auto-start it again
+-- If it was enabled before the rejoin, auto-start it again (wait 10 seconds)
 if petProtectEnabled then
 	task.spawn(function()
 		local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 		char:WaitForChild("Humanoid")
-		task.wait(1.8)
+		task.wait(10) -- wait 10 seconds after rejoin
 		setPetProtectEnabled(true)
 	end)
 end
 
 print("[AutoBuyPet] Loaded — Auto Rejoin + Config Save/Load + Auto Resume (Option B)")
-Notify("Loaded", "Settings restored • Auto Buy will resume if it was on", 3)
+Notify("Loaded", "Settings restored • Auto Buy will resume in 10s if it was on", 3)
