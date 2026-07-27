@@ -87,6 +87,7 @@ local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local GuiService = game:GetService("GuiService")
+local TextService = game:GetService("TextService")
 
 local Networking = require(ReplicatedStorage.SharedModules.Networking)
 local ShovelNet = Networking.Shovel
@@ -623,9 +624,8 @@ local TitleVersion = New("TextLabel", {
     Name = "TitleVersion",
 }, TitleBar)
 
-task.defer(function()
-    TitleVersion.Position = UDim2.new(0, 44 + HubTitle.TextBounds.X, 0.5, -7)
-end)
+local titleWidth = TextService:GetTextSize(Config.Title, 13, Theme.Font, Vector2.new(1000, 16)).X
+TitleVersion.Position = UDim2.new(0, 45 + titleWidth, 0.5, -7)
 
 local HubSubTitle = New("TextLabel", {
     Font = Theme.FontBody,
