@@ -211,6 +211,14 @@ local cleanupEnabled = false
 local autoSellEnabled = false
 local webhookEnabled = false
 local webhookUrl = ""
+sellWebhookEnabled = false
+sellWebhookUrl = ""
+webhookPetAlerts = true
+webhookSellAlerts = true
+webhookDisconnectAlerts = true
+sellBatchInterval = 15
+webhookUrlsVisible = false
+lastWebhookStatus = "No webhook sent yet"
 local lastDisconnectWebhookAt = 0
 local sessionStartedAt = os.time()
 -- This records the saved toggle state until the worker function exists.
@@ -401,8 +409,9 @@ local function getWebhookPetImage(petName)
     return imageUrl
 end
 
-local function sendWebhook(title, description, color, fields, thumbnailUrl)
-    if not webhookEnabled or webhookUrl == "" then return false end
+local function sendWebhook(title, description, color, fields, thumbnailUrl, destinationUrl, bypassMainToggle)
+    local targetUrl = destinationUrl or webhookUrl
+    if (not bypassMainToggle and not webhookEnabled) or targetUrl == "" then return false end
 
     local requestFn = (syn and syn.request)
         or (http and http.request)
@@ -410,6 +419,7 @@ local function sendWebhook(title, description, color, fields, thumbnailUrl)
         or request
     if type(requestFn) ~= "function" then
         warn("[AutoBuyPet] Webhook request function is unavailable in this executor.")
+        lastWebhookStatus = "Last webhook failed: request unavailable"
         return false
     end
 
@@ -431,19 +441,45 @@ local function sendWebhook(title, description, color, fields, thumbnailUrl)
 
     local requestOk, response = pcall(function()
         return requestFn({
-            Url = webhookUrl,
+            Url = targetUrl,
             Method = "POST",
             Headers = { ["Content-Type"] = "application/json" },
             Body = body,
         })
     end)
-    if not requestOk then
-        return false, tostring(response)
+    local statusCode = requestOk and type(response) == "table" and (response.StatusCode or response.Status)
+    if not requestOk or (statusCode and (tonumber(statusCode) or 0) >= 300) then
+        task.wait(0.8)
+        requestOk, response = pcall(function()
+            return requestFn({
+                Url = targetUrl,
+                Method = "POST",
+                Headers = { ["Content-Type"] = "application/json" },
+                Body = body,
+            })
+        end)
+        statusCode = requestOk and type(response) == "table" and (response.StatusCode or response.Status)
+        if not requestOk then
+            lastWebhookStatus = "Last webhook failed: " .. tostring(response)
+            if WebhookStatusLabel then
+                WebhookStatusLabel.Text = lastWebhookStatus
+                WebhookStatusLabel.TextColor3 = Theme.Text
+            end
+            return false, tostring(response)
+        end
+        if statusCode and (tonumber(statusCode) or 0) >= 300 then
+            lastWebhookStatus = "Last webhook failed: HTTP " .. tostring(statusCode)
+            if WebhookStatusLabel then
+                WebhookStatusLabel.Text = lastWebhookStatus
+                WebhookStatusLabel.TextColor3 = Theme.Text
+            end
+            return false, "Discord returned HTTP " .. tostring(statusCode)
+        end
     end
-
-    local statusCode = type(response) == "table" and (response.StatusCode or response.Status)
-    if statusCode and (tonumber(statusCode) or 0) >= 300 then
-        return false, "Discord returned HTTP " .. tostring(statusCode)
+    lastWebhookStatus = "Last sent: " .. tostring(title)
+    if WebhookStatusLabel then
+        WebhookStatusLabel.Text = lastWebhookStatus
+        WebhookStatusLabel.TextColor3 = Theme.Success
     end
     return true
 end
@@ -451,7 +487,7 @@ end
 pcall(function()
     GuiService.ErrorMessageChanged:Connect(function(message)
         local lowerMessage = string.lower(tostring(message or ""))
-        if (lowerMessage:find("error code: 279", 1, true) or lowerMessage:find("failed to connect", 1, true))
+        if webhookDisconnectAlerts and (lowerMessage:find("error code: 279", 1, true) or lowerMessage:find("failed to connect", 1, true))
             and tick() - lastDisconnectWebhookAt > 20 then
             lastDisconnectWebhookAt = tick()
             sendWebhook(
@@ -461,7 +497,6 @@ pcall(function()
                 {
                     { name = "TOTAL PETS", value = tostring(petsBought), inline = true },
                     { name = "TOTAL POINTS", value = tostring(totalPoints), inline = true },
-                    { name = "SERVER", value = string.sub(game.JobId, 1, 8) .. "...", inline = true },
                 }
             )
         end
@@ -512,12 +547,11 @@ end
 -- The sell remote accepts one PetId at a time. Pet Tools keep that unique ID
 -- in their PetId attribute, so names are used only to decide which tools are
 -- allowed to be sold.
-local SELL_INTERVAL = 2
 local lastPetSellAt = 0
 local petSellBusy = false
 
 local function sellSelectedBackpackPets()
-    if petSellBusy or not autoSellEnabled or tick() - lastPetSellAt < SELL_INTERVAL then
+    if petSellBusy or not autoSellEnabled or tick() - lastPetSellAt < sellBatchInterval then
         return
     end
     petSellBusy = true
@@ -525,6 +559,7 @@ local function sellSelectedBackpackPets()
 
     local backpack = LocalPlayer:FindFirstChild("Backpack")
     local attempted = 0
+    local soldByName = {}
     if backpack and Networking.NPCS and Networking.NPCS.SellPet then
         for _, tool in ipairs(backpack:GetChildren()) do
             if autoSellEnabled and tool:IsA("Tool") and selectedSellPets[tool.Name] then
@@ -535,6 +570,7 @@ local function sellSelectedBackpackPets()
                     end)
                     if ok then
                         attempted = attempted + 1
+                        soldByName[tool.Name] = (soldByName[tool.Name] or 0) + 1
                     else
                         warn("[AutoBuyPet] Could not sell " .. tool.Name .. ": " .. tostring(err))
                     end
@@ -546,6 +582,27 @@ local function sellSelectedBackpackPets()
 
     if attempted > 0 then
         print("[AutoBuyPet] Sent sell request for " .. attempted .. " selected pet(s).")
+        local soldLines = {}
+        for petName, amount in pairs(soldByName) do
+            table.insert(soldLines, petName .. " x" .. amount)
+        end
+        table.sort(soldLines)
+        if webhookSellAlerts and sellWebhookEnabled and sellWebhookUrl ~= "" then
+            sendWebhook(
+                "PETS SOLD",
+                "Selected Backpack pets were sold.",
+                15105570,
+                {
+                    { name = "SOLD", value = table.concat(soldLines, "\n"), inline = false },
+                    { name = "TOTAL SOLD", value = tostring(attempted), inline = true },
+                    { name = "SESSION PETS", value = formatWebhookNumber(petsBought), inline = true },
+                    { name = "SESSION POINTS", value = formatWebhookNumber(totalPoints), inline = true },
+                },
+                nil,
+                sellWebhookUrl,
+                true
+            )
+        end
     end
     petSellBusy = false
 end
@@ -579,6 +636,12 @@ function saveSettings()
         autoSellEnabled = autoSellEnabled,
         webhookEnabled = webhookEnabled,
         webhookUrl = webhookUrl,
+        sellWebhookEnabled = sellWebhookEnabled,
+        sellWebhookUrl = sellWebhookUrl,
+        webhookPetAlerts = webhookPetAlerts,
+        webhookSellAlerts = webhookSellAlerts,
+        webhookDisconnectAlerts = webhookDisconnectAlerts,
+        sellBatchInterval = sellBatchInterval,
         customJobIds = customJobIds,
         customJobIndex = customJobIndex,
         petProtectEnabled = petProtectEnabled,
@@ -637,6 +700,12 @@ local function loadSettings()
     autoSellEnabled = data.autoSellEnabled == true
     webhookEnabled = data.webhookEnabled == true
     webhookUrl = type(data.webhookUrl) == "string" and data.webhookUrl or ""
+    sellWebhookEnabled = data.sellWebhookEnabled == true
+    sellWebhookUrl = type(data.sellWebhookUrl) == "string" and data.sellWebhookUrl or ""
+    webhookPetAlerts = data.webhookPetAlerts ~= false
+    webhookSellAlerts = data.webhookSellAlerts ~= false
+    webhookDisconnectAlerts = data.webhookDisconnectAlerts ~= false
+    sellBatchInterval = math.clamp(tonumber(data.sellBatchInterval) or 15, 10, 30)
     if type(data.customJobIds) == "table" then
         customJobIds = data.customJobIds
     end
@@ -1669,7 +1738,7 @@ end)
 -- =========================================================
 -- RIGHT PANEL — SETTINGS
 -- =========================================================
-local SettingsPanel = CreatePanel(SettingsPage, "SettingsPanel", UDim2.new(0, 12, 0, 12), UDim2.new(1, -24, 0, 140), "BUY & MOVEMENT")
+SettingsPanel = CreatePanel(SettingsPage, "SettingsPanel", UDim2.new(0, 12, 0, 12), UDim2.new(1, -24, 0, 176), "BUY & MOVEMENT")
 
 New("TextLabel", {
     Text = "Max Price",
@@ -1852,10 +1921,132 @@ CleanupToggle.Activated:Connect(function()
     Notify("Cleanup", cleanupEnabled and "ScoopHub cleanup enabled." or "Cleanup disabled. A rejoin restores removed visuals.", 2)
 end)
 
+New("TextLabel", {
+    Text = "SETTINGS BACKUP",
+    Font = Theme.Font,
+    TextSize = 11,
+    TextColor3 = Theme.TextDim,
+    BackgroundTransparency = 1,
+    Position = UDim2.new(0, 12, 0, 128),
+    Size = UDim2.new(1, -24, 0, 14),
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, SettingsPanel)
+
+local ExportSettingsButton = New("TextButton", {
+    Name = "ExportSettingsButton",
+    Text = "EXPORT",
+    Font = Theme.Font,
+    TextSize = 11,
+    TextColor3 = Theme.White,
+    BackgroundColor3 = Theme.RedDark,
+    BorderSizePixel = 0,
+    Position = UDim2.new(0, 12, 0, 148),
+    Size = UDim2.new(0.5, -16, 0, 22),
+}, SettingsPanel)
+New("UICorner", { CornerRadius = UDim.new(0, 5) }, ExportSettingsButton)
+
+local ImportSettingsButton = New("TextButton", {
+    Name = "ImportSettingsButton",
+    Text = "IMPORT",
+    Font = Theme.Font,
+    TextSize = 11,
+    TextColor3 = Theme.White,
+    BackgroundColor3 = Theme.Surface3,
+    BorderSizePixel = 0,
+    Position = UDim2.new(0.5, 4, 0, 148),
+    Size = UDim2.new(0.5, -16, 0, 22),
+}, SettingsPanel)
+New("UICorner", { CornerRadius = UDim.new(0, 5) }, ImportSettingsButton)
+
+local BackupImportModal = New("Frame", {
+    Name = "BackupImportModal",
+    Visible = false,
+    BackgroundColor3 = Theme.Surface,
+    BorderSizePixel = 0,
+    Position = UDim2.new(0, 18, 0, 74),
+    Size = UDim2.new(1, -36, 0, 290),
+    ZIndex = 80,
+}, SettingsPage)
+New("UICorner", { CornerRadius = UDim.new(0, 7) }, BackupImportModal)
+New("UIStroke", { Color = Theme.Red, Thickness = 1.4 }, BackupImportModal)
+
+New("TextLabel", {
+    Text = "IMPORT SETTINGS BACKUP",
+    Font = Theme.Font,
+    TextSize = 13,
+    TextColor3 = Theme.White,
+    BackgroundTransparency = 1,
+    Position = UDim2.new(0, 12, 0, 10),
+    Size = UDim2.new(1, -24, 0, 18),
+    TextXAlignment = Enum.TextXAlignment.Left,
+    ZIndex = 81,
+}, BackupImportModal)
+
+New("TextLabel", {
+    Text = "Paste a backup created with Export. This replaces the current saved settings.",
+    Font = Theme.FontBody,
+    TextSize = 11,
+    TextColor3 = Theme.Muted,
+    BackgroundTransparency = 1,
+    Position = UDim2.new(0, 12, 0, 32),
+    Size = UDim2.new(1, -24, 0, 30),
+    TextWrapped = true,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    TextYAlignment = Enum.TextYAlignment.Top,
+    ZIndex = 81,
+}, BackupImportModal)
+
+local BackupImportBox = New("TextBox", {
+    Name = "BackupImportBox",
+    Text = "",
+    PlaceholderText = "Paste settings JSON here...",
+    MultiLine = true,
+    ClearTextOnFocus = false,
+    TextWrapped = true,
+    TextYAlignment = Enum.TextYAlignment.Top,
+    Font = Theme.FontBody,
+    TextSize = 11,
+    TextColor3 = Theme.InputText,
+    PlaceholderColor3 = Theme.Muted,
+    BackgroundColor3 = Theme.InputBg,
+    BorderSizePixel = 0,
+    Position = UDim2.new(0, 12, 0, 68),
+    Size = UDim2.new(1, -24, 0, 160),
+    ZIndex = 81,
+}, BackupImportModal)
+New("UICorner", { CornerRadius = UDim.new(0, 5) }, BackupImportBox)
+New("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8), PaddingTop = UDim.new(0, 6) }, BackupImportBox)
+
+local ConfirmImportButton = New("TextButton", {
+    Text = "IMPORT BACKUP",
+    Font = Theme.Font,
+    TextSize = 11,
+    TextColor3 = Theme.White,
+    BackgroundColor3 = Theme.Red,
+    BorderSizePixel = 0,
+    Position = UDim2.new(0, 12, 1, -34),
+    Size = UDim2.new(0.5, -16, 0, 22),
+    ZIndex = 81,
+}, BackupImportModal)
+New("UICorner", { CornerRadius = UDim.new(0, 5) }, ConfirmImportButton)
+
+local CancelImportButton = New("TextButton", {
+    Text = "CANCEL",
+    Font = Theme.Font,
+    TextSize = 11,
+    TextColor3 = Theme.White,
+    BackgroundColor3 = Theme.Surface3,
+    BorderSizePixel = 0,
+    Position = UDim2.new(0.5, 4, 1, -34),
+    Size = UDim2.new(0.5, -16, 0, 22),
+    ZIndex = 81,
+}, BackupImportModal)
+New("UICorner", { CornerRadius = UDim.new(0, 5) }, CancelImportButton)
+
 -- =========================================================
 -- SETTINGS TAB — OPTIONAL SERVER ROTATION
 -- =========================================================
-local JobIdPanel = CreatePanel(SettingsPage, "JobIdPanel", UDim2.new(0, 12, 0, 164), UDim2.new(1, -24, 1, -176), "SERVER HOP ROTATION")
+JobIdPanel = CreatePanel(SettingsPage, "JobIdPanel", UDim2.new(0, 12, 0, 200), UDim2.new(1, -24, 1, -212), "SERVER HOP ROTATION")
 
 New("TextLabel", {
     Text = "Add Job IDs to hop through them in order. Leave empty for random 1-6 player servers.",
@@ -2114,64 +2305,89 @@ end
 -- =========================================================
 -- STATUS + TOGGLE PANEL
 -- =========================================================
-local StatusPanel = CreatePanel(AutoBuyPage, "StatusPanel", UDim2.new(0, 12, 0, 222), UDim2.new(1, -24, 1, -234), "STATUS")
+StatusPanel = CreatePanel(AutoBuyPage, "StatusPanel", UDim2.new(0, 12, 0, 222), UDim2.new(1, -24, 1, -234), "STATUS")
 
-local StatusLabel = New("TextLabel", {
-    Name = "StatusLabel",
-    Text = "Protection: OFF",
-    Font = Theme.Font,
-    TextSize = 14,
-    TextColor3 = Theme.TextDim,
+New("TextLabel", {
+    Name = "SessionNameLabel",
+    Text = LocalPlayer.Name .. "'s session",
+    Font = Theme.FontBody,
+    TextSize = 10,
+    TextColor3 = Theme.Muted,
     BackgroundTransparency = 1,
-    Position = UDim2.new(0, 12, 0, 28),
-    Size = UDim2.new(1, -24, 0, 20),
+    Position = UDim2.new(0, 12, 0, 22),
+    Size = UDim2.new(0.5, -16, 0, 12),
     TextXAlignment = Enum.TextXAlignment.Left,
 }, StatusPanel)
 
-local BoughtLabel = New("TextLabel", {
-    Name = "BoughtLabel",
-    Text = "Pets Bought From This (" .. LocalPlayer.Name .. "): 0",
-    Font = Theme.Font,
-    TextSize = 14,
-    TextColor3 = Theme.Success,
-    BackgroundTransparency = 1,
-    Position = UDim2.new(0, 12, 0, 48),
-    Size = UDim2.new(1, -24, 0, 18),
-    TextXAlignment = Enum.TextXAlignment.Left,
+local LiveChip = New("Frame", {
+    Name = "LiveChip",
+    BackgroundColor3 = Theme.RedDark,
+    BorderSizePixel = 0,
+    Position = UDim2.new(1, -98, 0, 7),
+    Size = UDim2.new(0, 86, 0, 18),
 }, StatusPanel)
+New("UICorner", { CornerRadius = UDim.new(1, 0) }, LiveChip)
+local LiveChipLabel = New("TextLabel", {
+    Name = "LiveChipLabel",
+    Text = "● STOPPED",
+    Font = Theme.Font,
+    TextSize = 9,
+    TextColor3 = Theme.White,
+    BackgroundTransparency = 1,
+    Size = UDim2.new(1, 0, 1, 0),
+    TextXAlignment = Enum.TextXAlignment.Center,
+}, LiveChip)
 
-local PointsLabel = New("TextLabel", {
-    Name = "PointsLabel",
-    Text = "ysteystem: 0",
-    Font = Theme.Font,
-    TextSize = 14,
-    TextColor3 = Color3.fromRGB(255, 208, 105),
-    BackgroundTransparency = 1,
-    Position = UDim2.new(0, 12, 0, 68),
-    Size = UDim2.new(1, -24, 0, 18),
-    TextXAlignment = Enum.TextXAlignment.Left,
-}, StatusPanel)
+local function CreateStatusCard(name, position, labelText, valueColor)
+    local card = New("Frame", {
+        Name = name,
+        BackgroundColor3 = Theme.Surface3,
+        BackgroundTransparency = 0.1,
+        BorderSizePixel = 0,
+        Position = position,
+        Size = UDim2.new(0.5, -16, 0, 36),
+    }, StatusPanel)
+    New("UICorner", { CornerRadius = UDim.new(0, 5) }, card)
+    New("UIStroke", { Color = Theme.PanelLine, Thickness = 0.8, Transparency = 0.62 }, card)
+    New("TextLabel", {
+        Text = labelText,
+        Font = Theme.Font,
+        TextSize = 9,
+        TextColor3 = Theme.Muted,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 8, 0, 4),
+        Size = UDim2.new(1, -16, 0, 10),
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, card)
+    return New("TextLabel", {
+        Name = "Value",
+        Text = "--",
+        Font = Theme.Font,
+        TextSize = 15,
+        TextColor3 = valueColor,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 8, 0, 15),
+        Size = UDim2.new(1, -16, 0, 17),
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, card)
+end
 
-local ShecklesLabel = New("TextLabel", {
-    Name = "ShecklesLabel",
-    Text = "Sheckles: Loading...",
-    Font = Theme.Font,
-    TextSize = 14,
-    TextColor3 = Color3.fromRGB(123, 222, 151),
-    BackgroundTransparency = 1,
-    Position = UDim2.new(0, 12, 0, 88),
-    Size = UDim2.new(1, -24, 0, 18),
-    TextXAlignment = Enum.TextXAlignment.Left,
-}, StatusPanel)
+local StatusLabel = CreateStatusCard("ProtectionCard", UDim2.new(0, 12, 0, 38), "PROTECTION", Theme.TextDim)
+StatusLabel.Name = "StatusLabel"
+StatusLabel.Text = "OFF"
+
+local BoughtLabel = CreateStatusCard("SessionPetsCard", UDim2.new(0.5, 4, 0, 38), "SESSION PETS", Theme.Success)
+local PointsLabel = CreateStatusCard("PointsCard", UDim2.new(0, 12, 0, 80), "POINTS", Color3.fromRGB(255, 208, 105))
+local ShecklesLabel = CreateStatusCard("ShecklesCard", UDim2.new(0.5, 4, 0, 80), "SHECKLES", Color3.fromRGB(123, 222, 151))
 
 local TargetLabel = New("TextLabel", {
     Name = "TargetLabel",
-    Text = "Targets: Bunny",
+    Text = "TARGETS  •  Bunny",
     Font = Theme.FontBody,
-    TextSize = 12,
+    TextSize = 11,
     TextColor3 = Theme.Muted,
     BackgroundTransparency = 1,
-    Position = UDim2.new(0, 12, 0, 108),
+    Position = UDim2.new(0, 12, 0, 126),
     Size = UDim2.new(1, -24, 0, 18),
     TextXAlignment = Enum.TextXAlignment.Left,
     TextTruncate = Enum.TextTruncate.AtEnd,
@@ -2194,7 +2410,7 @@ New("UIStroke", { Color = Color3.fromRGB(255, 150, 157), Thickness = 1, Transpar
 -- =========================================================
 -- HISTORY TAB
 -- =========================================================
-local HistoryPanel = CreatePanel(HistoryPage, "HistoryPanel", UDim2.new(0, 12, 0, 12), UDim2.new(1, -24, 1, -24), "PET HISTORY")
+HistoryPanel = CreatePanel(HistoryPage, "HistoryPanel", UDim2.new(0, 12, 0, 12), UDim2.new(1, -24, 1, -24), "PET HISTORY")
 
 local HistoryTotalLabel = New("TextLabel", {
     Name = "HistoryTotalLabel",
@@ -2220,7 +2436,7 @@ local HistoryPointsLabel = New("TextLabel", {
     TextXAlignment = Enum.TextXAlignment.Right,
 }, HistoryPanel)
 
-local HistoryColumns = New("Frame", {
+HistoryColumns = New("Frame", {
     Name = "HistoryColumns",
     BackgroundColor3 = Theme.Surface3,
     BackgroundTransparency = 0.28,
@@ -2432,16 +2648,16 @@ end
 -- =========================================================
 -- WEBHOOK TAB
 -- =========================================================
-local WebhookPanel = CreatePanel(WebhookPage, "WebhookPanel", UDim2.new(0, 12, 0, 12), UDim2.new(1, -24, 1, -24), "WEBHOOK ALERTS")
+WebhookPanel = CreatePanel(WebhookPage, "WebhookPanel", UDim2.new(0, 12, 0, 12), UDim2.new(1, -24, 1, -24), "WEBHOOK ALERTS")
 
 New("TextLabel", {
-    Text = "Receive an alert for every secured pet, plus a best-effort Error 279 disconnect alert.",
+    Text = "Main alerts stay separate from sell summaries. Choose exactly which alerts you receive.",
     Font = Theme.FontBody,
     TextSize = 12,
     TextColor3 = Theme.Muted,
     BackgroundTransparency = 1,
     Position = UDim2.new(0, 12, 0, 28),
-    Size = UDim2.new(1, -24, 0, 30),
+    Size = UDim2.new(1, -24, 0, 24),
     TextWrapped = true,
     TextXAlignment = Enum.TextXAlignment.Left,
 }, WebhookPanel)
@@ -2452,7 +2668,7 @@ New("TextLabel", {
     TextSize = 12,
     TextColor3 = Theme.TextDim,
     BackgroundTransparency = 1,
-    Position = UDim2.new(0, 12, 0, 70),
+    Position = UDim2.new(0, 12, 0, 58),
     Size = UDim2.new(1, -24, 0, 14),
     TextXAlignment = Enum.TextXAlignment.Left,
 }, WebhookPanel)
@@ -2471,11 +2687,39 @@ local WebhookUrlBox = New("TextBox", {
     ClearTextOnFocus = false,
     TextTruncate = Enum.TextTruncate.AtEnd,
     TextXAlignment = Enum.TextXAlignment.Left,
-    Position = UDim2.new(0, 12, 0, 88),
-    Size = UDim2.new(1, -24, 0, 28),
+    Position = UDim2.new(0, 12, 0, 76),
+    Size = UDim2.new(1, -96, 0, 28),
 }, WebhookPanel)
 New("UICorner", { CornerRadius = UDim.new(0, 5) }, WebhookUrlBox)
 New("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, WebhookUrlBox)
+
+WebhookUrlShowButton = New("TextButton", {
+    Text = "SHOW", Font = Theme.Font, TextSize = 10, TextColor3 = Theme.White,
+    BackgroundColor3 = Theme.Surface3, BorderSizePixel = 0,
+    Position = UDim2.new(1, -76, 0, 76), Size = UDim2.new(0, 64, 0, 28),
+}, WebhookPanel)
+New("UICorner", { CornerRadius = UDim.new(0, 5) }, WebhookUrlShowButton)
+
+New("TextLabel", {
+    Text = "Sell Webhook URL", Font = Theme.Font, TextSize = 12, TextColor3 = Theme.TextDim,
+    BackgroundTransparency = 1, Position = UDim2.new(0, 12, 0, 112), Size = UDim2.new(1, -24, 0, 14),
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, WebhookPanel)
+SellWebhookUrlBox = New("TextBox", {
+    Name = "SellWebhookUrlBox", Text = "", PlaceholderText = "https://discord.com/api/webhooks/...",
+    Font = Theme.FontBody, TextSize = 12, TextColor3 = Theme.InputText, PlaceholderColor3 = Theme.Muted,
+    BackgroundColor3 = Theme.InputBg, BorderSizePixel = 0, ClipsDescendants = true, ClearTextOnFocus = false,
+    TextTruncate = Enum.TextTruncate.AtEnd, TextXAlignment = Enum.TextXAlignment.Left,
+    Position = UDim2.new(0, 12, 0, 130), Size = UDim2.new(1, -96, 0, 28),
+}, WebhookPanel)
+New("UICorner", { CornerRadius = UDim.new(0, 5) }, SellWebhookUrlBox)
+New("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, SellWebhookUrlBox)
+SellWebhookUrlShowButton = New("TextButton", {
+    Text = "SHOW", Font = Theme.Font, TextSize = 10, TextColor3 = Theme.White,
+    BackgroundColor3 = Theme.Surface3, BorderSizePixel = 0,
+    Position = UDim2.new(1, -76, 0, 130), Size = UDim2.new(0, 64, 0, 28),
+}, WebhookPanel)
+New("UICorner", { CornerRadius = UDim.new(0, 5) }, SellWebhookUrlShowButton)
 
 New("TextLabel", {
     Text = "Enable Webhook",
@@ -2483,17 +2727,17 @@ New("TextLabel", {
     TextSize = 12,
     TextColor3 = Theme.TextDim,
     BackgroundTransparency = 1,
-    Position = UDim2.new(0, 12, 0, 132),
+    Position = UDim2.new(0, 12, 0, 170),
     Size = UDim2.new(1, -100, 0, 14),
     TextXAlignment = Enum.TextXAlignment.Left,
 }, WebhookPanel)
 New("TextLabel", {
-    Text = "Pet secured + connection alerts",
+    Text = "Main webhook",
     Font = Theme.FontBody,
     TextSize = 11,
     TextColor3 = Theme.Muted,
     BackgroundTransparency = 1,
-    Position = UDim2.new(0, 12, 0, 147),
+    Position = UDim2.new(0, 12, 0, 185),
     Size = UDim2.new(1, -100, 0, 14),
     TextXAlignment = Enum.TextXAlignment.Left,
 }, WebhookPanel)
@@ -2503,7 +2747,7 @@ local WebhookToggle = New("TextButton", {
     Text = "",
     BackgroundColor3 = Theme.RedDark,
     BorderSizePixel = 0,
-    Position = UDim2.new(1, -62, 0, 135),
+    Position = UDim2.new(1, -62, 0, 173),
     Size = UDim2.new(0, 48, 0, 24),
 }, WebhookPanel)
 New("UICorner", { CornerRadius = UDim.new(1, 0) }, WebhookToggle)
@@ -2518,45 +2762,93 @@ local WebhookKnob = New("Frame", {
 New("UICorner", { CornerRadius = UDim.new(1, 0) }, WebhookKnob)
 
 local TestWebhookButton = New("TextButton", {
-    Text = "SEND TEST ALERT",
+    Text = "TEST MAIN",
     Font = Theme.Font,
     TextSize = 12,
     TextColor3 = Theme.White,
     BackgroundColor3 = Theme.RedDark,
     BorderSizePixel = 0,
-    Position = UDim2.new(0, 12, 0, 180),
-    Size = UDim2.new(1, -24, 0, 30),
+    Position = UDim2.new(0, 12, 0, 216),
+    Size = UDim2.new(0.5, -16, 0, 26),
 }, WebhookPanel)
 New("UICorner", { CornerRadius = UDim.new(0, 5) }, TestWebhookButton)
 
-local WebhookStatusLabel = New("TextLabel", {
+New("TextLabel", {
+    Text = "Enable Sell Webhook", Font = Theme.Font, TextSize = 12, TextColor3 = Theme.TextDim,
+    BackgroundTransparency = 1, Position = UDim2.new(0, 12, 0, 256), Size = UDim2.new(1, -100, 0, 14),
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, WebhookPanel)
+SellWebhookToggle = New("TextButton", {
+    Text = "", BackgroundColor3 = Theme.RedDark, BorderSizePixel = 0,
+    Position = UDim2.new(1, -62, 0, 253), Size = UDim2.new(0, 48, 0, 24),
+}, WebhookPanel)
+New("UICorner", { CornerRadius = UDim.new(1, 0) }, SellWebhookToggle)
+SellWebhookKnob = New("Frame", {
+    BackgroundColor3 = Theme.White, BorderSizePixel = 0, AnchorPoint = Vector2.new(0, 0.5),
+    Position = UDim2.new(0, 3, 0.5, 0), Size = UDim2.new(0, 18, 0, 18),
+}, SellWebhookToggle)
+New("UICorner", { CornerRadius = UDim.new(1, 0) }, SellWebhookKnob)
+TestSellWebhookButton = New("TextButton", {
+    Text = "TEST SELL", Font = Theme.Font, TextSize = 12, TextColor3 = Theme.White,
+    BackgroundColor3 = Theme.RedDark, BorderSizePixel = 0,
+    Position = UDim2.new(0.5, 4, 0, 216), Size = UDim2.new(0.5, -16, 0, 26),
+}, WebhookPanel)
+New("UICorner", { CornerRadius = UDim.new(0, 5) }, TestSellWebhookButton)
+
+New("TextLabel", {
+    Text = "ALERTS", Font = Theme.Font, TextSize = 10, TextColor3 = Theme.TextDim,
+    BackgroundTransparency = 1, Position = UDim2.new(0, 12, 0, 290), Size = UDim2.new(1, -24, 0, 12),
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, WebhookPanel)
+PetAlertButton = New("TextButton", { Text = "PET: ON", Font = Theme.Font, TextSize = 10, TextColor3 = Theme.White, BackgroundColor3 = Theme.Success, BorderSizePixel = 0, Position = UDim2.new(0, 12, 0, 306), Size = UDim2.new(1/3, -16, 0, 22) }, WebhookPanel)
+SellAlertButton = New("TextButton", { Text = "SELL: ON", Font = Theme.Font, TextSize = 10, TextColor3 = Theme.White, BackgroundColor3 = Theme.Success, BorderSizePixel = 0, Position = UDim2.new(1/3, 4, 0, 306), Size = UDim2.new(1/3, -16, 0, 22) }, WebhookPanel)
+DisconnectAlertButton = New("TextButton", { Text = "ERROR: ON", Font = Theme.Font, TextSize = 10, TextColor3 = Theme.White, BackgroundColor3 = Theme.Success, BorderSizePixel = 0, Position = UDim2.new(2/3, -4, 0, 306), Size = UDim2.new(1/3, -8, 0, 22) }, WebhookPanel)
+New("UICorner", { CornerRadius = UDim.new(0, 5) }, PetAlertButton)
+New("UICorner", { CornerRadius = UDim.new(0, 5) }, SellAlertButton)
+New("UICorner", { CornerRadius = UDim.new(0, 5) }, DisconnectAlertButton)
+
+New("TextLabel", { Text = "Sell batch interval (10-30 seconds)", Font = Theme.Font, TextSize = 11, TextColor3 = Theme.TextDim, BackgroundTransparency = 1, Position = UDim2.new(0, 12, 0, 340), Size = UDim2.new(0.65, 0, 0, 16), TextXAlignment = Enum.TextXAlignment.Left }, WebhookPanel)
+SellBatchIntervalBox = New("TextBox", { Text = "15", Font = Theme.Font, TextSize = 12, TextColor3 = Theme.InputText, BackgroundColor3 = Theme.InputBg, BorderSizePixel = 0, ClearTextOnFocus = false, Position = UDim2.new(1, -82, 0, 336), Size = UDim2.new(0, 70, 0, 24), TextXAlignment = Enum.TextXAlignment.Center }, WebhookPanel)
+New("UICorner", { CornerRadius = UDim.new(0, 5) }, SellBatchIntervalBox)
+
+WebhookStatusLabel = New("TextLabel", {
     Name = "WebhookStatusLabel",
     Text = "Webhook is OFF",
     Font = Theme.FontBody,
     TextSize = 11,
     TextColor3 = Theme.Muted,
     BackgroundTransparency = 1,
-    Position = UDim2.new(0, 12, 0, 218),
-    Size = UDim2.new(1, -24, 0, 18),
+    Position = UDim2.new(0, 12, 1, -26),
+    Size = UDim2.new(1, -24, 0, 14),
     TextXAlignment = Enum.TextXAlignment.Left,
+    TextTruncate = Enum.TextTruncate.AtEnd,
 }, WebhookPanel)
 
 local function updateWebhookUI()
     WebhookUrlBox.Text = webhookUrl
+    SellWebhookUrlBox.Text = sellWebhookUrl
+    WebhookUrlBox.TextTransparency = webhookUrlsVisible and 0 or 1
+    SellWebhookUrlBox.TextTransparency = webhookUrlsVisible and 0 or 1
+    WebhookUrlShowButton.Text = webhookUrlsVisible and "HIDE" or "SHOW"
+    SellWebhookUrlShowButton.Text = webhookUrlsVisible and "HIDE" or "SHOW"
     WebhookToggle.BackgroundColor3 = webhookEnabled and Theme.Success or Theme.RedDark
     SafeTween(WebhookKnob, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
         Position = webhookEnabled and UDim2.new(1, -21, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
     })
-    if webhookEnabled and webhookUrl ~= "" then
-        WebhookStatusLabel.Text = "Webhook alerts are enabled and saved."
-        WebhookStatusLabel.TextColor3 = Theme.Success
-    elseif webhookEnabled then
-        WebhookStatusLabel.Text = "Add a Discord webhook URL before enabling alerts."
-        WebhookStatusLabel.TextColor3 = Theme.Text
-    else
-        WebhookStatusLabel.Text = "Webhook is OFF"
-        WebhookStatusLabel.TextColor3 = Theme.Muted
-    end
+    SellWebhookToggle.BackgroundColor3 = sellWebhookEnabled and Theme.Success or Theme.RedDark
+    SafeTween(SellWebhookKnob, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        Position = sellWebhookEnabled and UDim2.new(1, -21, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
+    })
+    PetAlertButton.Text = webhookPetAlerts and "PET: ON" or "PET: OFF"
+    SellAlertButton.Text = webhookSellAlerts and "SELL: ON" or "SELL: OFF"
+    DisconnectAlertButton.Text = webhookDisconnectAlerts and "ERROR: ON" or "ERROR: OFF"
+    PetAlertButton.BackgroundColor3 = webhookPetAlerts and Theme.Success or Theme.RedDark
+    SellAlertButton.BackgroundColor3 = webhookSellAlerts and Theme.Success or Theme.RedDark
+    DisconnectAlertButton.BackgroundColor3 = webhookDisconnectAlerts and Theme.Success or Theme.RedDark
+    SellBatchIntervalBox.Text = tostring(sellBatchInterval)
+    WebhookStatusLabel.Text = lastWebhookStatus
+    WebhookStatusLabel.TextColor3 = string.find(lastWebhookStatus, "failed", 1, true) and Theme.Text
+        or (string.find(lastWebhookStatus, "sent", 1, true) and Theme.Success or Theme.Muted)
 end
 
 WebhookUrlBox.FocusLost:Connect(function()
@@ -2576,12 +2868,57 @@ WebhookUrlBox:GetPropertyChangedSignal("Text"):Connect(function()
     end)
 end)
 
+SellWebhookUrlBox.FocusLost:Connect(function()
+    sellWebhookUrl = tostring(SellWebhookUrlBox.Text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    saveSettings()
+    updateWebhookUI()
+end)
+
+SellWebhookUrlBox:GetPropertyChangedSignal("Text"):Connect(function()
+    webhookSaveSerial = webhookSaveSerial + 1
+    local currentSerial = webhookSaveSerial
+    task.delay(0.7, function()
+        if currentSerial ~= webhookSaveSerial then return end
+        sellWebhookUrl = tostring(SellWebhookUrlBox.Text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        saveSettings()
+    end)
+end)
+
+WebhookUrlShowButton.Activated:Connect(function()
+    webhookUrlsVisible = not webhookUrlsVisible
+    updateWebhookUI()
+end)
+SellWebhookUrlShowButton.Activated:Connect(function()
+    webhookUrlsVisible = not webhookUrlsVisible
+    updateWebhookUI()
+end)
+
 WebhookToggle.Activated:Connect(function()
     if not webhookEnabled and webhookUrl == "" then
         Notify("Webhook", "Paste your Discord webhook URL first.", 2)
         return
     end
     webhookEnabled = not webhookEnabled
+    saveSettings()
+    updateWebhookUI()
+end)
+
+SellWebhookToggle.Activated:Connect(function()
+    if not sellWebhookEnabled and sellWebhookUrl == "" then
+        Notify("Sell Webhook", "Paste your Sell Webhook URL first.", 2)
+        return
+    end
+    sellWebhookEnabled = not sellWebhookEnabled
+    saveSettings()
+    updateWebhookUI()
+end)
+
+PetAlertButton.Activated:Connect(function() webhookPetAlerts = not webhookPetAlerts; saveSettings(); updateWebhookUI() end)
+SellAlertButton.Activated:Connect(function() webhookSellAlerts = not webhookSellAlerts; saveSettings(); updateWebhookUI() end)
+DisconnectAlertButton.Activated:Connect(function() webhookDisconnectAlerts = not webhookDisconnectAlerts; saveSettings(); updateWebhookUI() end)
+
+SellBatchIntervalBox.FocusLost:Connect(function()
+    sellBatchInterval = math.clamp(tonumber(SellBatchIntervalBox.Text) or sellBatchInterval, 10, 30)
     saveSettings()
     updateWebhookUI()
 end)
@@ -2597,6 +2934,17 @@ TestWebhookButton.Activated:Connect(function()
     else
         Notify("Webhook", "Test failed: " .. tostring(reason or "request unavailable"), 4)
     end
+    updateWebhookUI()
+end)
+
+TestSellWebhookButton.Activated:Connect(function()
+    if not sellWebhookEnabled or sellWebhookUrl == "" then
+        Notify("Sell Webhook", "Enable Sell Webhook and add a URL first.", 2)
+        return
+    end
+    local sent, reason = sendWebhook("Sell Webhook Connected", "Test sell-summary alert from AUTO BUY PET V1.6.", 15105570, nil, nil, sellWebhookUrl, true)
+    Notify("Sell Webhook", sent and "Test alert delivered." or ("Test failed: " .. tostring(reason or "request unavailable")), sent and 2 or 4)
+    updateWebhookUI()
 end)
 
 local shecklesValueObject = nil
@@ -2648,25 +2996,29 @@ end
 
 local function updateShecklesUI()
     local sheckles = getSheckles()
-    ShecklesLabel.Text = sheckles and ("Sheckles: " .. formatSheckles(sheckles)) or "Sheckles: Not found"
+    ShecklesLabel.Text = sheckles and formatSheckles(sheckles) or "Not found"
 end
 
 local function updateStatusUI()
     if petProtectEnabled then
-        StatusLabel.Text = "Protection: ON"
+        StatusLabel.Text = "ON"
         StatusLabel.TextColor3 = Theme.Success
+        LiveChipLabel.Text = "● RUNNING"
+        LiveChip.BackgroundColor3 = Color3.fromRGB(37, 126, 89)
         ToggleButton.Text = "DISABLE AUTO BUY PET"
         ToggleButton.BackgroundColor3 = Theme.RedDark
     else
-        StatusLabel.Text = "Protection: OFF"
+        StatusLabel.Text = "OFF"
         StatusLabel.TextColor3 = Theme.TextDim
+        LiveChipLabel.Text = "● STOPPED"
+        LiveChip.BackgroundColor3 = Theme.RedDark
         ToggleButton.Text = "ENABLE AUTO BUY PET"
         ToggleButton.BackgroundColor3 = Theme.Red
     end
-    BoughtLabel.Text = "Pets Bought By " .. LocalPlayer.Name .. ": " .. petsBought
-    PointsLabel.Text = "Points: " .. totalPoints
+    BoughtLabel.Text = formatWebhookNumber(petsBought)
+    PointsLabel.Text = formatWebhookNumber(totalPoints)
     updateShecklesUI()
-    TargetLabel.Text = "Targets: " .. formatList(targetPetNames)
+    TargetLabel.Text = "TARGETS  •  " .. formatList(targetPetNames)
 end
 
 local function normalizeRarity(value)
@@ -3034,20 +3386,21 @@ local function setPetProtectEnabled(enabled)
                         updateStatusUI()
                         if updateHistoryUI then updateHistoryUI() end
                         local webhookPetName = WEBHOOK_PET_PAGE_NAMES[petName] or petName
-                        sendWebhook(
-                            "🐾 PET SECURED",
-                            "**" .. webhookPetName .. "** was secured successfully.",
-                            WEBHOOK_RARITY_COLORS[rarity] or 5763719,
-                            {
-                                { name = "PET", value = webhookPetName, inline = true },
-                                { name = "RARITY", value = rarity, inline = true },
-                                { name = "POINTS", value = "+" .. points, inline = true },
-                                { name = "TOTAL PETS", value = tostring(petsBought), inline = true },
-                                { name = "TOTAL POINTS", value = formatWebhookNumber(totalPoints), inline = true },
-                                { name = "SERVER", value = string.sub(game.JobId, 1, 8) .. "...", inline = true },
-                            },
-                            getWebhookPetImage(petName)
-                        )
+                        if webhookPetAlerts then
+                            sendWebhook(
+                                "🐾 PET SECURED",
+                                "**" .. webhookPetName .. "** was secured successfully.",
+                                WEBHOOK_RARITY_COLORS[rarity] or 5763719,
+                                {
+                                    { name = "PET", value = webhookPetName, inline = true },
+                                    { name = "RARITY", value = rarity, inline = true },
+                                    { name = "POINTS", value = "+" .. points, inline = true },
+                                    { name = "TOTAL PETS", value = tostring(petsBought), inline = true },
+                                    { name = "TOTAL POINTS", value = formatWebhookNumber(totalPoints), inline = true },
+                                },
+                                getWebhookPetImage(petName)
+                            )
+                        end
                         Notify("Secured!", petName .. " bought! " .. rarity .. " +" .. points .. " points", 2)
                         break
                     end
@@ -3178,6 +3531,92 @@ end
 
 ToggleButton.Activated:Connect(function()
     setPetProtectEnabled(not petProtectEnabled)
+end)
+
+ExportSettingsButton.Activated:Connect(function()
+    saveSettings()
+    local exported = nil
+    pcall(function()
+        if readfile and isfile and isfile(CONFIG_FILE) then
+            exported = readfile(CONFIG_FILE)
+        end
+    end)
+    if not exported then
+        Notify("Settings Backup", "Could not read the settings file.", 3)
+        return
+    end
+
+    local copy = setclipboard or toclipboard
+    if type(copy) == "function" then
+        local copied = pcall(copy, exported)
+        if copied then
+            Notify("Settings Backup", "Backup copied to clipboard.", 3)
+            return
+        end
+    end
+
+    BackupImportBox.Text = exported
+    BackupImportModal.Visible = true
+    Notify("Settings Backup", "Clipboard unavailable — copy the text manually.", 3)
+end)
+
+ImportSettingsButton.Activated:Connect(function()
+    BackupImportBox.Text = ""
+    BackupImportModal.Visible = true
+end)
+
+CancelImportButton.Activated:Connect(function()
+    BackupImportModal.Visible = false
+end)
+
+ConfirmImportButton.Activated:Connect(function()
+    local rawBackup = tostring(BackupImportBox.Text or "")
+    local decodedOk, backupData = pcall(function()
+        return HttpService:JSONDecode(rawBackup)
+    end)
+    if not decodedOk or type(backupData) ~= "table" then
+        Notify("Settings Backup", "That backup text is not valid JSON.", 3)
+        return
+    end
+    if not (writefile and isfolder and makefolder) then
+        Notify("Settings Backup", "Your executor cannot save imported settings.", 3)
+        return
+    end
+
+    local wrote = pcall(function()
+        if not isfolder(CONFIG_FOLDER) then
+            makefolder(CONFIG_FOLDER)
+        end
+        writefile(CONFIG_FILE, rawBackup)
+    end)
+    if not wrote then
+        Notify("Settings Backup", "Could not write the imported backup.", 3)
+        return
+    end
+
+    local wasAutoBuyEnabled = petProtectEnabled
+    loadSettings()
+    local importedAutoBuyEnabled = petProtectEnabled
+
+    PriceBox.Text = tostring(maxPetPrice)
+    SpeedBox.Text = tostring(petWalkSpeed)
+    RadiusBox.Text = tostring(petPunchRadius)
+    rebuildTargetList()
+    rebuildSellList()
+    updateSellUI()
+    updateRejoinUI()
+    updateJobIdsUI()
+    rebuildJobIdList()
+    updateCleanupUI()
+    updateWebhookUI()
+    if updateHistoryUI then updateHistoryUI() end
+    if cleanupEnabled then setCleanupEnabled(true) end
+
+    if wasAutoBuyEnabled ~= importedAutoBuyEnabled then
+        setPetProtectEnabled(importedAutoBuyEnabled)
+    end
+    BackupImportModal.Visible = false
+    Notify("Settings Backup", "Backup restored successfully.", 3)
 end)
 
 -- =========================================================
